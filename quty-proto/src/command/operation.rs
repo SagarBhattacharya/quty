@@ -142,7 +142,7 @@ impl Operation {
 	///
 	/// ```
 	/// # use bytes::Bytes;
-	/// # use crate::protocol::command::Operation;
+	/// # use quty_proto::Operation;
 	/// let op = Operation::Get { key: "account:1024:profile".into() };
 	/// assert_eq!(op.routing_key(), "account");
 	///

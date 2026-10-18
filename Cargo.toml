@@ -5,6 +5,12 @@ edition = "2024"
 
 [workspace]
 resolver = "3"
-members = ["protocol"]
+members = ["quty-proto"]
 
 [dependencies]
+quty-proto = { path = "quty-proto" }
+bytes = "1.12.1"
+hashbrown = "0.17.1"
+smallvec = "2.0.0-beta.3"
+ahash = "0.8.12"
+parking_lot = "0.12.5"

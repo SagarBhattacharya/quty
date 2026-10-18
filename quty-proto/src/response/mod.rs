@@ -8,7 +8,8 @@ pub use payload::{
 	PayloadType,
 	StatsPayload,
 	SubResult,
-	ResponsePayload
+	ResponsePayload,
+	BatchErrorPayload
 };
 pub use header::ResponseHeader;
 

@@ -9,3 +9,4 @@ pub const MAX_FRAME_SIZE: usize =
 	16;
 
 pub const STATS_PAYLOAD_SIZE: usize = 64; // 8 fields * 8 bytes
+pub const BATCH_ERR_PAYLOAD_SIZE: usize = 3; // failed_index (2B) + status_code (1B)

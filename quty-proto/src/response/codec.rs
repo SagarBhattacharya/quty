@@ -1,10 +1,10 @@
 use bytes::{Buf, BufMut, BytesMut};
 use crate::constants::{HEADER_SIZE, STATS_PAYLOAD_SIZE};
 use crate::response::header::ResponseHeader;
-use crate::response::payload::{PayloadType, ResponsePayload, StatsPayload, SubResult};
+use crate::response::payload::{BatchErrorPayload, PayloadType, ResponsePayload, StatsPayload, SubResult};
 use crate::response::Response;
 use crate::response::status::StatusCode;
-use crate::ResponseDecodeError;
+use crate::{ResponseDecodeError, BATCH_ERR_PAYLOAD_SIZE};
 
 impl Response {
 	/// Decodes a complete Response frame from an incoming TCP buffer.
@@ -84,6 +84,15 @@ impl Response {
 
 				ResponsePayload::Array(sub_results)
 			}
+			PayloadType::BatchErr => {
+				if header.payload_len != BATCH_ERR_PAYLOAD_SIZE as u32 {
+					return Err(ResponseDecodeError::PayloadLengthMismatch {
+						expected: BATCH_ERR_PAYLOAD_SIZE,
+						found: header.payload_len as usize,
+					});
+				}
+				ResponsePayload::BatchError(BatchErrorPayload::decode(&mut frame)?)
+			}
 		};
 
 		Ok(Some(Response {
@@ -118,6 +127,7 @@ impl Response {
 					sub.encode(dst);
 				}
 			}
+			ResponsePayload::BatchError(err) => err.encode(dst),
 		}
 
 		let payload_len = (dst.len() - payload_start) as u32;
@@ -157,7 +167,28 @@ impl StatsPayload {
 	}
 }
 
-
+impl BatchErrorPayload {
+	#[inline]
+	pub fn encode(&self, dst: &mut BytesMut) {
+		dst.put_u16(self.failed_index);
+		dst.put_u8(self.failure_code as u8);
+	}
+	
+	#[inline]
+	pub fn decode(buf: &mut BytesMut) -> Result<Self, ResponseDecodeError> {
+		if buf.remaining() < BATCH_ERR_PAYLOAD_SIZE {
+			return Err(ResponseDecodeError::Incomplete);
+		}
+		
+		Ok(
+			BatchErrorPayload {
+				failed_index: buf.get_u16(),
+				failure_code: StatusCode::try_from(buf.get_u8())
+					.map_err(ResponseDecodeError::UnknownStatusCode)?,
+			}
+		)
+	}
+}
 
 impl SubResult {
 	pub fn encode(&self, dst: &mut BytesMut) {
@@ -175,9 +206,12 @@ impl SubResult {
 			ResponsePayload::Int64(v) => dst.put_u64(*v as u64),
 			ResponsePayload::String(s) => dst.extend_from_slice(s.as_bytes()),
 			ResponsePayload::Raw(b) => dst.extend_from_slice(b),
-			ResponsePayload::Stats(stats) => stats.encode(dst),
-			ResponsePayload::Array(_) => {
-				panic!("Nested arrays inside SubResult are prohibited");
+			
+			ResponsePayload::Stats(_) |
+			ResponsePayload::Array(_) |
+			ResponsePayload::BatchError(_) => {
+				let ty = format!("{:?}", self.payload.payload_type());
+				panic!("Nested {} inside SubResult are prohibited", ty.to_lowercase());
 			}
 		}
 
@@ -226,17 +260,14 @@ impl SubResult {
 				ResponsePayload::String(s)
 			}
 			PayloadType::Raw => ResponsePayload::Raw(data_slice.freeze()),
-			PayloadType::Stats => {
-				if len != STATS_PAYLOAD_SIZE {
-					return Err(ResponseDecodeError::PayloadLengthMismatch {
-						expected: STATS_PAYLOAD_SIZE,
-						found: len,
-					});
-				}
-				ResponsePayload::Stats(StatsPayload::decode(&mut data_slice)?)
-			}
-			PayloadType::Array => {
-				return Err(ResponseDecodeError::InvalidPayload("Nested Array prohibited".into()));
+
+			ty @ PayloadType::Array |
+			ty @ PayloadType::BatchErr |
+			ty @ PayloadType::Stats => {
+				let ty = format!("{:?}", ty).to_lowercase();
+				return Err(ResponseDecodeError::InvalidPayload(
+					format!("Nested {ty} is prohibited")
+				));
 			}
 		};
 

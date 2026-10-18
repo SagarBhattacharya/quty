@@ -1,5 +1,5 @@
 use bytes::{Bytes, BytesMut};
-use protocol::*;
+use quty_proto::*;
 
 #[test]
 fn test_stream_fragmentation_resilience() {
@@ -98,26 +98,13 @@ fn test_bidirectional_pipelined_stream() {
 
 #[test]
 fn test_batch_execution_short_circuit_wire_representation() {
-	// Simulates engine reporting a batch that failed at step 2 (0-indexed)
-	let batch_results = vec![
-		SubResult {
-			status: StatusCode::Ok,
-			payload: ResponsePayload::Null,
-		},
-		SubResult {
-			status: StatusCode::Created,
-			payload: ResponsePayload::Null,
-		},
-		SubResult {
-			status: StatusCode::KeyExists, // Condition failure causing short-circuit
-			payload: ResponsePayload::Null,
-		},
-	];
-
 	let resp = Response::new(
 		99,
 		StatusCode::BatchShortCircuited,
-		ResponsePayload::Array(batch_results),
+		ResponsePayload::BatchError(BatchErrorPayload {
+			failed_index: 2,
+			failure_code: StatusCode::KeyExists,
+		})
 	);
 
 	let mut buf = BytesMut::new();
@@ -126,11 +113,9 @@ fn test_batch_execution_short_circuit_wire_representation() {
 	let decoded = Response::decode(&mut buf).unwrap().unwrap();
 	assert_eq!(decoded.status, StatusCode::BatchShortCircuited);
 
-	if let ResponsePayload::Array(results) = decoded.payload {
-		assert_eq!(results.len(), 3);
-		assert_eq!(results[0].status, StatusCode::Ok);
-		assert_eq!(results[1].status, StatusCode::Created);
-		assert_eq!(results[2].status, StatusCode::KeyExists);
+	if let ResponsePayload::BatchError(err) = decoded.payload {
+		assert_eq!(err.failed_index, 2);
+		assert_eq!(err.failure_code, StatusCode::KeyExists);
 	} else {
 		panic!("Decoded response payload is not an Array");
 	}

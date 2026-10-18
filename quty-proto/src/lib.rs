@@ -20,7 +20,8 @@ pub use response::{
 	ResponsePayload,
 	StatsPayload,
 	StatusCode,
-	SubResult
+	SubResult,
+	BatchErrorPayload
 };
 
 #[derive(Debug, Error, PartialEq, Eq)]
