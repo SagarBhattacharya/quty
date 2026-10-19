@@ -1,4 +1,4 @@
-//! Binary protocol opcodes for quty (high performance in-memory cache server) (v1).
+//! Binary protocol opcodes for quty (high performance in-memory cache net) (v1).
 //!
 //! All opcodes represent fixed 1-byte discriminants (`u8`) in the frame header.
 //! Numerical values are strictly frozen to preserve backward and forward wire compatibility.

@@ -15,7 +15,6 @@ use crate::db::shard::{CapacityExceeded, Shard};
 use ahash::RandomState;
 use parking_lot::RwLock;
 use quty_proto::{BatchErrorPayload, Command, Operation, ResponsePayload, StatsPayload, StatusCode, SubResult};
-use std::hash::{BuildHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -40,7 +39,6 @@ pub struct Engine {
 	shards: Vec<RwLock<Shard>>,
 	hasher: RandomState,
 	start_time: Instant,
-	max_memory_bytes: usize,
 
 	// Telemetry
 	total_connections: AtomicU64,
@@ -64,7 +62,6 @@ impl Engine {
 			shards,
 			hasher: RandomState::new(),
 			start_time: Instant::now(),
-			max_memory_bytes: config.max_memory_bytes,
 			total_connections: AtomicU64::new(0),
 			curr_connections: AtomicU64::new(0),
 			get_hits: AtomicU64::new(0),
@@ -74,7 +71,7 @@ impl Engine {
 	}
 
 	// -------------------------------------------------------------------------
-	// Public Engine Facade (The ONLY entry point called by the server layer)
+	// Public Engine Facade (The ONLY entry point called by the net layer)
 	// -------------------------------------------------------------------------
 
 	/// Dispatches any transport or storage command to its appropriate handler.
@@ -147,13 +144,9 @@ impl Engine {
 
 		for (idx, op) in ops.iter().enumerate() {
 			let (status, payload) = guard.execute_op(op, now, clock);
-			let is_success = matches!(
-				status,
-				StatusCode::Ok | StatusCode::Created | StatusCode::NoContent
-			);
 
-			if !is_success {
-				// Drop guard (triggers rollback) and return ONLY the offending index and error
+			// Only hard errors (e.g., KeyExists on ADD, StorageFull, etc.) abort the batch
+			if status.should_abort_batch() {
 				return (
 					StatusCode::BatchShortCircuited,
 					ResponsePayload::BatchError(BatchErrorPayload {
@@ -172,9 +165,9 @@ impl Engine {
 
 	#[inline]
 	fn shard_index(&self, routing_key: &str) -> usize {
-		let mut h = self.hasher.build_hasher();
-		routing_key.hash(&mut h);
-		(h.finish() as usize) % self.shards.len()
+		(self.hasher.
+			hash_one(routing_key) as usize
+		) % self.shards.len()
 	}
 
 	#[inline]

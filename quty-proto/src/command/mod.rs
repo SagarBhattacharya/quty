@@ -4,7 +4,7 @@ mod operation;
 pub use opcode::Opcode;
 pub use operation::Operation;
 
-/// Top-level decoded client request_old dispatched by the server connection loop.
+/// Top-level decoded client request_old dispatched by the net connection loop.
 ///
 /// Encapsulates transport-level administrative operations and storage-targeted
 /// requests (both isolated single operations and compound atomic batches).

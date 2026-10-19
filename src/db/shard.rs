@@ -360,11 +360,6 @@ impl Shard {
 	}
 
 	#[inline]
-	pub fn is_empty(&self) -> bool {
-		self.entries.is_empty()
-	}
-
-	#[inline]
 	pub fn used_memory_bytes(&self) -> usize {
 		self.used_payload_bytes
 	}

@@ -52,10 +52,4 @@ impl Entry {
 	pub fn idle_duration(&self, current_clock: u32) -> u32 {
 		current_clock.saturating_sub(self.last_accessed.load(Ordering::Relaxed))
 	}
-
-	/// Exact heap payload footprint for deterministic memory accounting.
-	#[inline]
-	pub fn payload_size(&self) -> usize {
-		self.value.len()
-	}
 }

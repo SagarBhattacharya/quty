@@ -1,9 +1,9 @@
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use crate::RequestDecodeError;
 use crate::command::{Command, Opcode, Operation};
 use crate::constants::*;
-use crate::request::header::RequestHeader;
 use crate::request::Request;
-use crate::RequestDecodeError;
+use crate::request::header::RequestHeader;
+use bytes::{Buf, BufMut, BytesMut};
 
 impl Request {
 	/// Decodes a complete Request frame from an incoming TCP buffer.

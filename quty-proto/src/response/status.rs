@@ -96,3 +96,45 @@ impl TryFrom<u8> for StatusCode {
 		}
 	}
 }
+
+impl StatusCode {
+	/// Returns true for successful state modifications or hits.
+	#[inline]
+	pub fn is_success(&self) -> bool {
+		matches!(self, Self::Ok | Self::Created | Self::NoContent)
+	}
+
+	/// Returns true for expected domain outcomes that do not represent failures
+	/// (e.g. cache misses, expired keys returning nil).
+	#[inline]
+	pub fn is_soft_error(&self) -> bool {
+		matches!(self, Self::KeyNotFound | Self::KeyExpired)
+	}
+
+	/// Returns true for structural, memory, constraint, or syntax failures.
+	#[inline]
+	pub fn is_hard_error(&self) -> bool {
+		matches!(
+			self,
+			Self::KeyExists
+				| Self::PreconditionFailed
+				| Self::StorageFull
+				| Self::KeyTooLarge
+				| Self::ValueTooLarge
+				| Self::CrossShardViolation
+				| Self::EmptyBatch
+				| Self::BatchShortCircuited
+				| Self::BadRequest
+				| Self::InternalError
+				| Self::UnknownOpcode
+				| Self::NestedBatchNotAllowed
+				| Self::ServerBusy
+		)
+	}
+
+	/// Determines whether this status code must abort an atomic batch transaction.
+	#[inline]
+	pub fn should_abort_batch(&self) -> bool {
+		self.is_hard_error()
+	}
+}
