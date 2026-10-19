@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn test_exact_payload_accounting_lifecycle() {
-	let mut shard = Shard::new(1024);
+	let mut shard = Shard::new(1024, 128, 8192);
 	let key: Box<str> = "user:1".into(); // 6 bytes
 	let val = Bytes::from_static(b"payload_val"); // 11 bytes
 
@@ -27,7 +27,7 @@ fn test_exact_payload_accounting_lifecycle() {
 
 #[test]
 fn test_lazy_ghosting_ttl_under_reads() {
-	let mut shard = Shard::new(1024);
+	let mut shard = Shard::new(1024, 128, 8192);
 	let now = Instant::now();
 	let key: Box<str> = "session:temp".into();
 	let val = Bytes::from_static(b"secret");
@@ -48,7 +48,7 @@ fn test_lazy_ghosting_ttl_under_reads() {
 
 #[test]
 fn test_uniform_sampling_stride_wraparound() {
-	let mut shard = Shard::new(10_000);
+	let mut shard = Shard::new(10_000, 128, 8192);
 	for i in 0..100 {
 		let key = format!("k:{:03}", i).into_boxed_str();
 		shard.insert(key, Bytes::from_static(b"v"), None, 0).unwrap();
@@ -73,7 +73,7 @@ fn test_uniform_sampling_stride_wraparound() {
 #[test]
 fn test_insert_no_evict_hard_capacity_wall() {
 	let max_cap = 64;
-	let mut shard = Shard::new(max_cap);
+	let mut shard = Shard::new(max_cap, 128, 8192);
 
 	let k1: Box<str> = "k:1".into(); // 3 bytes
 	let v1 = Bytes::from(vec![0u8; 40]); // 40 bytes -> total 43 bytes

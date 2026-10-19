@@ -6,7 +6,11 @@ use std::time::Instant;
 
 #[test]
 fn test_rollback_on_failed_suboperation() {
-	let mut shard = Shard::new(1024);
+	let mut shard = Shard::new(
+		1024, 
+		128, 
+		8192
+	);
 	let now = Instant::now();
 	let clock = 0;
 
@@ -62,7 +66,11 @@ fn test_rollback_on_failed_suboperation() {
 
 #[test]
 fn test_rollback_on_thread_panic_unwinding() {
-	let mut shard = Shard::new(1024);
+	let mut shard = Shard::new(
+		1024,
+		128,
+		8192
+	);
 	let now = Instant::now();
 	let clock = 0;
 

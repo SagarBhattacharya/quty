@@ -16,16 +16,22 @@ pub struct Shard {
 	used_payload_bytes: usize,
 	max_payload_bytes: usize,
 	sample_cursor: usize, // Monotonic stride cursor for uniform sampling
+	eviction_burst_limit: usize,
 }
 
 impl Shard {
-	pub fn new(max_payload_bytes: usize) -> Self {
+	pub fn new(
+		max_payload_bytes: usize,
+		eviction_burst_limit: usize,
+		initial_capacity: usize,
+	) -> Self {
 		Self {
 			// Pre-allocate bucket space for ~8k keys per shard
-			entries: AHashMap::with_capacity(8192),
+			entries: AHashMap::with_capacity(initial_capacity),
 			used_payload_bytes: 0,
 			max_payload_bytes,
 			sample_cursor: 0,
+			eviction_burst_limit,
 		}
 	}
 
@@ -290,12 +296,12 @@ impl Shard {
 	pub fn evict_to_target(
 		&mut self,
 		target_bytes: usize,
-		max_keys: usize,
 		current_clock: u32,
 	) -> usize {
 		let mut evicted = 0;
 
-		while self.used_payload_bytes > target_bytes && evicted < max_keys {
+		while self.used_payload_bytes > target_bytes 
+			&& evicted < self.eviction_burst_limit {
 			if let Some(candidate_key) = self.find_lru_candidate(
 				DEFAULT_SAMPLE_SIZE, current_clock
 			) {

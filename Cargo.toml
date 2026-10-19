@@ -16,6 +16,7 @@ parking_lot = "0.12.5"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"]}
 tikv-jemallocator = "0.7.0"
+clap = { version = "4.6.7", features = ["derive"] }
 
 [dependencies.tokio-util]
 version = "0.7.20"

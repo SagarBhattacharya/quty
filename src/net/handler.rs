@@ -13,15 +13,16 @@ pub fn handle_request(req: Request, engine: &Arc<Engine>) -> Response {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::db::EngineConfig;
 	use bytes::Bytes;
 	use quty_proto::{Command, Operation, ResponsePayload, StatusCode};
+	use crate::config::EngineConfig;
 
 	#[test]
 	fn test_handle_request_round_trip() {
 		let engine = Engine::new(EngineConfig {
 			num_shards: 4,
 			max_memory_bytes: 1024 * 1024,
+			..Default::default()
 		});
 
 		// 1. Dispatch SET request with request_id = 42

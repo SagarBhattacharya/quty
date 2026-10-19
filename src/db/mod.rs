@@ -16,25 +16,12 @@ use crate::db::shard::{CapacityExceeded, Shard};
 use crate::db::stats::EngineStats;
 use ahash::RandomState;
 use parking_lot::RwLock;
-use quty_proto::{BatchErrorPayload, Command, Operation, ResponsePayload, StatsPayload, StatusCode, SubResult};
+use quty_proto::*;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use crate::config::EngineConfig;
 
 pub const MAX_BATCH_SIZE: usize = 64;
-
-pub struct EngineConfig {
-	pub num_shards: usize,
-	pub max_memory_bytes: usize,
-}
-
-impl Default for EngineConfig {
-	fn default() -> Self {
-		Self {
-			num_shards: 64,
-			max_memory_bytes: 1024 * 1024 * 1024, // 1 GB
-		}
-	}
-}
 
 pub struct Engine {
 	shards: Vec<RwLock<Shard>>,
@@ -49,7 +36,11 @@ impl Engine {
 
 		let mut shards = Vec::with_capacity(config.num_shards);
 		for _ in 0..config.num_shards {
-			shards.push(RwLock::new(Shard::new(per_shard_bytes)));
+			shards.push(RwLock::new(Shard::new(
+				per_shard_bytes,
+				config.eviction_burst_limit,
+				config.initial_shard_capacity,
+			)));
 		}
 
 		Arc::new(Self {
@@ -396,7 +387,7 @@ impl Engine {
 					break;
 				}
 
-				let evicted = shard.evict_to_target(low_bytes, 128, clock);
+				let evicted = shard.evict_to_target(low_bytes, clock);
 				total_evicted += evicted;
 
 				if evicted == 0 || shard.used_memory_bytes() <= low_bytes {

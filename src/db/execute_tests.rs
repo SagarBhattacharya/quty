@@ -6,6 +6,7 @@ fn make_test_engine() -> std::sync::Arc<Engine> {
 	Engine::new(EngineConfig {
 		num_shards: 4,
 		max_memory_bytes: 64 * 1024, // 64 KB total (16 KB per shard)
+		..Default::default()
 	})
 }
 

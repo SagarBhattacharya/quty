@@ -1,4 +1,5 @@
-use crate::db::{Engine, EngineConfig};
+use crate::db::{Engine};
+use crate::config::EngineConfig;
 use bytes::Bytes;
 use quty_proto::{Command, Operation, StatusCode};
 
@@ -7,6 +8,7 @@ fn test_batch_cross_shard_routing_guard() {
 	let config = EngineConfig {
 		num_shards: 16,
 		max_memory_bytes: 1024 * 1024,
+		..Default::default()
 	};
 	let engine = Engine::new(config);
 
@@ -59,6 +61,7 @@ fn test_background_maintenance_sweep() {
 	let config = EngineConfig {
 		num_shards: 2,
 		max_memory_bytes: 200, // 100 bytes per shard
+		..Default::default()
 	};
 	let engine = Engine::new(config);
 
