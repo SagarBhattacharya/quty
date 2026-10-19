@@ -10,12 +10,13 @@ mod rollback_tests;
 mod engine_tests;
 #[cfg(test)]
 mod execute_tests;
+mod stats;
 
 use crate::db::shard::{CapacityExceeded, Shard};
+use crate::db::stats::EngineStats;
 use ahash::RandomState;
 use parking_lot::RwLock;
 use quty_proto::{BatchErrorPayload, Command, Operation, ResponsePayload, StatsPayload, StatusCode, SubResult};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -38,14 +39,7 @@ impl Default for EngineConfig {
 pub struct Engine {
 	shards: Vec<RwLock<Shard>>,
 	hasher: RandomState,
-	start_time: Instant,
-
-	// Telemetry
-	total_connections: AtomicU64,
-	curr_connections: AtomicU64,
-	get_hits: AtomicU64,
-	get_misses: AtomicU64,
-	evictions: AtomicU64,
+	stats: EngineStats,
 }
 
 impl Engine {
@@ -61,12 +55,7 @@ impl Engine {
 		Arc::new(Self {
 			shards,
 			hasher: RandomState::new(),
-			start_time: Instant::now(),
-			total_connections: AtomicU64::new(0),
-			curr_connections: AtomicU64::new(0),
-			get_hits: AtomicU64::new(0),
-			get_misses: AtomicU64::new(0),
-			evictions: AtomicU64::new(0),
+			stats: EngineStats::new(),
 		})
 	}
 
@@ -106,9 +95,9 @@ impl Engine {
 
 			if matches!(op, Operation::Get { .. }) {
 				if is_hit {
-					self.get_hits.fetch_add(1, Ordering::Relaxed);
+					self.stats.inc_hits();
 				} else {
-					self.get_misses.fetch_add(1, Ordering::Relaxed);
+					self.stats.inc_misses();
 				}
 			}
 
@@ -172,7 +161,7 @@ impl Engine {
 
 	#[inline]
 	fn current_lru_clock(&self) -> u32 {
-		self.start_time.elapsed().as_secs() as u32
+		self.stats.uptime_secs() as u32
 	}
 
 	fn reset_all(&self) {
@@ -248,7 +237,7 @@ impl Engine {
 				match shard.insert(key.clone().into_boxed_str(), value.clone(), None, clock) {
 					Ok((Some(old), evicted)) => {
 						if evicted > 0 {
-							self.evictions.fetch_add(evicted as u64, Ordering::Relaxed);
+							self.stats.inc_evictions(evicted);
 						}
 						if !old.is_expired(now) {
 							(StatusCode::Ok, ResponsePayload::Null)
@@ -258,7 +247,7 @@ impl Engine {
 					}
 					Ok((None, evicted)) => {
 						if evicted > 0 {
-							self.evictions.fetch_add(evicted as u64, Ordering::Relaxed);
+							self.stats.inc_evictions(evicted);
 						}
 						(StatusCode::Created, ResponsePayload::Null)
 					}
@@ -274,7 +263,7 @@ impl Engine {
 						match shard.insert(key.clone().into_boxed_str(), value.clone(), None, clock) {
 							Ok((_, evicted)) => {
 								if evicted > 0 {
-									self.evictions.fetch_add(evicted as u64, Ordering::Relaxed);
+									self.stats.inc_evictions(evicted);
 								}
 								(StatusCode::Created, ResponsePayload::Null)
 							},
@@ -284,7 +273,7 @@ impl Engine {
 					None => match shard.insert(key.clone().into_boxed_str(), value.clone(), None, clock) {
 						Ok((_, evicted)) => {
 							if evicted > 0 {
-								self.evictions.fetch_add(evicted as u64, Ordering::Relaxed);
+								self.stats.inc_evictions(evicted);
 							}
 							(StatusCode::Created, ResponsePayload::Null)
 						},
@@ -299,7 +288,7 @@ impl Engine {
 						match shard.insert(key.clone().into_boxed_str(), value.clone(), None, clock) {
 							Ok((_, evicted)) => {
 								if evicted > 0 {
-									self.evictions.fetch_add(evicted as u64, Ordering::Relaxed);
+									self.stats.inc_evictions(evicted);
 								}
 								(StatusCode::Ok, ResponsePayload::Null)
 							},
@@ -347,13 +336,12 @@ impl Engine {
 
 	#[inline]
 	pub fn on_client_connected(&self) {
-		self.total_connections.fetch_add(1, Ordering::Relaxed);
-		self.curr_connections.fetch_add(1, Ordering::Relaxed);
+		self.stats.on_client_connected();
 	}
 
 	#[inline]
 	pub fn on_client_disconnected(&self) {
-		self.curr_connections.fetch_sub(1, Ordering::Relaxed);
+		self.stats.on_client_disconnected();
 	}
 
 	pub fn collect_stats(&self) -> StatsPayload {
@@ -367,14 +355,13 @@ impl Engine {
 		}
 
 		StatsPayload {
-			uptime_secs: self.start_time.elapsed().as_secs(),
-			total_connections: self.total_connections.load(Ordering::Relaxed),
-			curr_connections: self.curr_connections.load(Ordering::Relaxed),
-			get_hits: self.get_hits.load(Ordering::Relaxed),
-			get_misses: self.get_misses.load(Ordering::Relaxed),
-			total_keys,
-			used_memory_bytes,
-			evictions: self.evictions.load(Ordering::Relaxed),
+			uptime_secs: self.stats.uptime_secs(),
+			total_connections: self.stats.total_connections(),
+			curr_connections: self.stats.curr_connections(),
+			get_hits: self.stats.get_hits(),
+			get_misses: self.stats.get_misses(),
+			evictions: self.stats.get_evictions(),
+			total_keys, used_memory_bytes
 		}
 	}
 
@@ -393,34 +380,34 @@ impl Engine {
 		let mut total_evicted = 0;
 
 		for shard_lock in &self.shards {
-			// 1. Passive fast check under shared read lock
-			let needs_eviction = {
-				let shard = shard_lock.read();
-				let high_threshold = (shard.max_memory_bytes() as f64
-					* high_watermark_ratio) as usize;
-				shard.used_memory_bytes() >= high_threshold
-			};
+			{
+				let mut shard = shard_lock.write();
+				let purged = shard.sweep_expired(16, now);
+				total_expired += purged;
+			}
 
-			// 2. Perform work under exclusive write lock only if necessary
-			let mut shard = shard_lock.write();
+			loop {
+				let mut shard = shard_lock.write();
+				let capacity = shard.max_memory_bytes();
+				let high_bytes = (capacity as f64 * high_watermark_ratio) as usize;
+				let low_bytes = (capacity as f64 * low_watermark_ratio) as usize;
 
-			// Expire sample
-			let purged = shard.sweep_expired(16, now);
-			total_expired += purged;
+				if shard.used_memory_bytes() <= high_bytes {
+					break;
+				}
 
-			// Evict if high watermark breached
-			if needs_eviction {
-				let target_bytes = (shard.max_memory_bytes() as f64
-					* low_watermark_ratio) as usize;
-				let evicted = shard.evict_to_target(target_bytes, clock);
+				let evicted = shard.evict_to_target(low_bytes, 128, clock);
 				total_evicted += evicted;
+
+				if evicted == 0 || shard.used_memory_bytes() <= low_bytes {
+					break;
+				}
 			}
 		}
 
 		if total_evicted > 0 {
-			self.evictions.fetch_add(total_evicted as u64, Ordering::Relaxed);
+			self.stats.inc_evictions(total_evicted);
 		}
-
 		(total_expired, total_evicted)
 	}
 }

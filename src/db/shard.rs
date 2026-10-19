@@ -1,8 +1,8 @@
 use crate::db::entry::Entry;
 use bytes::Bytes;
-use hashbrown::HashMap;
 use smallvec::SmallVec;
 use std::time::Instant;
+use ahash::AHashMap;
 
 pub const DEFAULT_SAMPLE_SIZE: usize = 5;
 pub const MAX_EVICTION_ATTEMPTS: usize = 16;
@@ -12,7 +12,7 @@ pub const INLINE_HEADROOM_BYTES: usize = 64 * 1024; // 64 KB buffer
 pub struct CapacityExceeded;
 
 pub struct Shard {
-	entries: HashMap<Box<str>, Entry>,
+	entries: AHashMap<Box<str>, Entry>,
 	used_payload_bytes: usize,
 	max_payload_bytes: usize,
 	sample_cursor: usize, // Monotonic stride cursor for uniform sampling
@@ -21,7 +21,8 @@ pub struct Shard {
 impl Shard {
 	pub fn new(max_payload_bytes: usize) -> Self {
 		Self {
-			entries: HashMap::new(),
+			// Pre-allocate bucket space for ~8k keys per shard
+			entries: AHashMap::with_capacity(8192),
 			used_payload_bytes: 0,
 			max_payload_bytes,
 			sample_cursor: 0,
@@ -284,23 +285,24 @@ impl Shard {
 		oldest_key
 	}
 
-	/// Evicts entries until payload usage drops down to or below `target_bytes`.
-	/// Used by both the background sweep and inline emergency eviction.
+	/// Evicts up to `max_keys` LRU candidates until target bytes are reached.
+	/// Returns the number of keys evicted.
 	pub fn evict_to_target(
 		&mut self,
 		target_bytes: usize,
-		current_clock: u32
+		max_keys: usize,
+		current_clock: u32,
 	) -> usize {
 		let mut evicted = 0;
 
-		while self.used_payload_bytes > target_bytes {
-			if let Some(candidate) = self.find_lru_candidate(
+		while self.used_payload_bytes > target_bytes && evicted < max_keys {
+			if let Some(candidate_key) = self.find_lru_candidate(
 				DEFAULT_SAMPLE_SIZE, current_clock
 			) {
-				self.remove(&candidate);
+				self.remove(&candidate_key);
 				evicted += 1;
 			} else {
-				break; // Map is empty
+				break;
 			}
 		}
 

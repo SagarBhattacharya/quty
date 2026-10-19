@@ -11,6 +11,13 @@ use tokio_util::task::TaskTracker;
 use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 const BIND_ADDR: &str = "0.0.0.0:6379";
 const NUM_SHARDS: usize = 64;
 const MAX_MEMORY_BYTES: usize = 512 * 1024 * 1024; // 512 MB
@@ -117,7 +124,7 @@ async fn run_accept_loop(
 
 				tracker.spawn(async move {
 					let connection = Connection::new(
-						socket, peer_addr, 
+						socket, peer_addr,
 						conn_engine, conn_cancel
 					);
 					connection.run().await;

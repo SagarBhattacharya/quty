@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, trace, warn};
 
 pub const DEFAULT_BUFFER_SIZE: usize = 64 * 1024; // 64 KB
+const FLUSH_THRESHOLD_BYTES: usize = 128 * 1024;
 
 pub struct Connection {
 	socket: TcpStream,
@@ -96,6 +97,10 @@ impl Connection {
 					);
 
 					response.encode(&mut self.write_buf);
+
+					if self.write_buf.len() >= FLUSH_THRESHOLD_BYTES {
+						self.flush_write_buffer().await?;
+					}
 				}
 				Ok(None) => break, // Incomplete frame; wait for more data
 				Err(err) => {
