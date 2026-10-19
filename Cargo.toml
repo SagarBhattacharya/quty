@@ -5,7 +5,7 @@ edition = "2024"
 
 [workspace]
 resolver = "3"
-members = ["quty-client","quty-proto"]
+members = ["quty-bench","quty-client","quty-proto"]
 
 [dependencies]
 quty-proto = { path = "quty-proto" }
