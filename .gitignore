@@ -6,3 +6,5 @@
 *.log
 .DS_Store
 bench_results.txt
+release-package.sh
+dist/

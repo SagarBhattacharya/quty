@@ -6,3 +6,5 @@ docs/book/
 *.log
 .quty_history
 bench_results.txt
+release-package.sh
+dist/
