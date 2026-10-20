@@ -5,3 +5,4 @@
 *.swp
 *.log
 .DS_Store
+bench_results.txt
