@@ -90,10 +90,13 @@ impl KeyGenerator {
 					})
 				}
 			}
-			WorkloadType::Ttl => Command::Single(Operation::Set {
-				key: format!("ttl:{key}"),
-				value: self.payload_buffer.clone(),
-			}),
+			WorkloadType::Ttl => {
+				let ttl_key = format!("s{shard_id:02}:ttl:{key_idx:08}");
+				Command::Single(Operation::Set {
+					key: ttl_key,
+					value: self.payload_buffer.clone(),
+				})
+			}
 			WorkloadType::Batch => {
 				// Single-shard invariant: all sub-operations share prefix `s{shard_id:02}:`
 				let k1 = format!("s{shard_id:02}:tx:{key_idx:08}:a");
@@ -130,5 +133,42 @@ impl KeyGenerator {
 				])
 			}
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::collections::HashSet;
+
+	#[test]
+	fn test_ttl_workload_distributes_across_shards() {
+		let mut key_gen = KeyGenerator::new(10_000, false, 64, 12345);
+		let mut observed_shards = HashSet::new();
+
+		// Sample 1,000 commands and verify routing prefixes
+		for _ in 0..1_000 {
+			if let Command::Single(op) = key_gen.next_command(WorkloadType::Ttl) {
+				let routing_prefix = op.routing_key();
+				assert!(
+					routing_prefix.starts_with('s'),
+					"Expected shard prefix 'sXX', got: {routing_prefix}"
+				);
+				assert_ne!(
+					routing_prefix, "ttl",
+					"Routing key must not be 'ttl' (would cause single-shard contention)"
+				);
+				observed_shards.insert(routing_prefix.to_string());
+			} else {
+				panic!("Expected Command::Single for WorkloadType::Ttl");
+			}
+		}
+
+		// 1,000 samples across 64 shards should hit all or nearly all shards
+		assert!(
+			observed_shards.len() >= 60,
+			"Expected distribution across shards, but only observed {} shards",
+			observed_shards.len()
+		);
 	}
 }
