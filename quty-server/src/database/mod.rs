@@ -183,11 +183,18 @@ impl Engine {
 		}
 	}
 
-	fn reset_all(&self) {
-		for shard_lock in &self.shards {
-			let mut shard = shard_lock.write();
+	/// Atomically flushes all keys, resets shard memory accounting, and zeroes operational telemetry.
+	///
+	/// # Deadlock Freedom Invariant
+	/// Locks are acquired strictly in increasing index order (`0..self.shards.len()`).
+	/// Since all other operations touch at most one shard at a time, lock acquisition cannot cycle.
+	pub fn reset_all(&self) {
+		let mut write_guards: Vec<_> = self.shards.iter()
+			.map(|shard| shard.write()).collect();
+		for shard in &mut write_guards {
 			shard.clear();
 		}
+		self.stats.reset();
 	}
 
 	/// Records a newly accepted client TCP connection.
@@ -444,5 +451,53 @@ mod tests {
 		let stats_after = engine.collect_stats();
 		assert_eq!(stats_after.get_hits, 1, "Batch GET should record a cache hit");
 		assert_eq!(stats_after.get_misses, 1, "Batch GET should record a cache miss");
+	}
+
+	#[test]
+	fn test_reset_atomically_clears_all_shards_and_telemetry() {
+		let engine = Engine::new(EngineConfig {
+			num_shards: 8,
+			max_memory_bytes: 1024 * 1024,
+			initial_shard_capacity: 64,
+			eviction_burst_limit: 16,
+		});
+		
+		for i in 0..64 {
+			let _ = engine.execute(Command::Single(Operation::Set {
+				key: format!("s{i:02}:k{i}"),
+				value: Bytes::from_static(b"benchmark_data"),
+			}));
+		}
+
+		// Trigger hits and misses
+		let _ = engine.execute(Command::Single(Operation::Get {
+			key: "s00:k0".to_string(),
+		}));
+		let _ = engine.execute(Command::Single(Operation::Get {
+			key: "s00:missing".to_string(),
+		}));
+
+		let stats_before = engine.collect_stats();
+		assert_eq!(stats_before.total_keys, 64);
+		assert!(stats_before.used_memory_bytes > 0);
+		assert_eq!(stats_before.get_hits, 1);
+		assert_eq!(stats_before.get_misses, 1);
+		
+		let (status, _) = engine.execute(Command::Reset);
+		assert_eq!(status, StatusCode::NoContent);
+
+		let stats_after = engine.collect_stats();
+		assert_eq!(stats_after.total_keys, 0);
+		assert_eq!(stats_after.used_memory_bytes, 0);
+		assert_eq!(stats_after.get_hits, 0, "Hits must be zeroed after RESET");
+		assert_eq!(stats_after.get_misses, 0, "Misses must be zeroed after RESET");
+		assert_eq!(stats_after.evictions, 0, "Evictions must be zeroed after RESET");
+
+		for i in 0..64 {
+			let (get_status, _) = engine.execute(Command::Single(Operation::Get {
+				key: format!("s{i:02}:k{i}"),
+			}));
+			assert_eq!(get_status, StatusCode::KeyNotFound);
+		}
 	}
 }

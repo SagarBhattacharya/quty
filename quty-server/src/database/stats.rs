@@ -37,6 +37,15 @@ impl EngineStats {
 		}
 	}
 
+	/// Resets all operational telemetry counters back to zero.
+	///
+	/// Preserves persistent server metrics such as server start time and active connections.
+	pub fn reset(&self) {
+		self.get_hits.value.store(0, Ordering::Relaxed);
+		self.get_misses.value.store(0, Ordering::Relaxed);
+		self.evictions.value.store(0, Ordering::Relaxed);
+	}
+
 	#[inline]
 	pub fn on_client_connected(&self) {
 		self.total_connections.value.fetch_add(1, Ordering::Relaxed);
