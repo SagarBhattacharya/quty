@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "rust";
             const default_dark_theme = "coal";
-            window.path_to_searchindex_js = "searchindex-39d087ff.js";
+            window.path_to_searchindex_js = "searchindex-06b4413d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-76d82f47.js"></script>
@@ -184,11 +184,17 @@
 <p><strong>Quty</strong> is a multithreaded, in-memory cache daemon written in Rust. It provides sub-millisecond key-value operations, deterministic payload memory budgeting, and single-shard atomic batch transactions with guaranteed rollback invariants.</p>
 <h2 id="core-capabilities"><a class="header" href="#core-capabilities">Core Capabilities</a></h2>
 <ul>
-<li><strong>Partitioned Key-Space:</strong> Automatic power-of-two sharding (<code>ahash</code>) with independent <code>parking_lot::RwLock</code> instances to eliminate global lock contention across worker threads.</li>
-<li><strong>Deterministic Memory Budgeting:</strong> Explicit memory accounting tracking key and value byte lengths, backed by inline headroom reclamation and background maintenance sweeps.</li>
-<li><strong>Stateless Sampled LRU:</strong> Memory-efficient candidate selection via an indexed dense key vector maintaining $O(1)$ amortized <code>swap_remove</code> operations with zero bucket iteration stalls.</li>
-<li><strong>Atomic Batch Transactions:</strong> Single-shard atomic sequences (<code>BATCH (cmd1, cmd2, ...)</code>) with RAII-managed undo stacks. If an operation fails a precondition or causes a capacity breach, state is safely rolled back in LIFO order.</li>
-<li><strong>Binary Wire Protocol:</strong> Compact 20-byte fixed frame header supporting pipelined streaming I/O and zero-allocation frame decoding.</li>
+<li><strong>Partitioned Key-Space:</strong> Power-of-two sharding with independent
+<code>parking_lot::RwLock</code> instances reduces contention by isolating most
+operations to individual shards.</li>
+<li><strong>Payload-Byte Budgeting:</strong> Accounts for key and value bytes, excluding
+data-structure and allocator overhead. The budget is not a process-RSS limit.</li>
+<li><strong>Sampled LRU Eviction:</strong> Uses a dense key index for candidate sampling
+without scanning the entire hash map.</li>
+<li><strong>Atomic Batch Transactions:</strong> Single-shard batches use an undo log to
+restore prior state when an operation fails.</li>
+<li><strong>Binary Wire Protocol:</strong> A fixed 20-byte header supports incremental
+decoding and bounded request and response payloads.</li>
 </ul>
 
                     </main>

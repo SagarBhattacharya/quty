@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "rust";
             const default_dark_theme = "coal";
-            window.path_to_searchindex_js = "searchindex-39d087ff.js";
+            window.path_to_searchindex_js = "searchindex-06b4413d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-76d82f47.js"></script>
@@ -182,11 +182,17 @@
 <p><strong>Quty</strong> is a multithreaded, in-memory cache daemon written in Rust. It provides sub-millisecond key-value operations, deterministic payload memory budgeting, and single-shard atomic batch transactions with guaranteed rollback invariants.</p>
 <h2 id="core-capabilities"><a class="header" href="#core-capabilities">Core Capabilities</a></h2>
 <ul>
-<li><strong>Partitioned Key-Space:</strong> Automatic power-of-two sharding (<code>ahash</code>) with independent <code>parking_lot::RwLock</code> instances to eliminate global lock contention across worker threads.</li>
-<li><strong>Deterministic Memory Budgeting:</strong> Explicit memory accounting tracking key and value byte lengths, backed by inline headroom reclamation and background maintenance sweeps.</li>
-<li><strong>Stateless Sampled LRU:</strong> Memory-efficient candidate selection via an indexed dense key vector maintaining $O(1)$ amortized <code>swap_remove</code> operations with zero bucket iteration stalls.</li>
-<li><strong>Atomic Batch Transactions:</strong> Single-shard atomic sequences (<code>BATCH (cmd1, cmd2, ...)</code>) with RAII-managed undo stacks. If an operation fails a precondition or causes a capacity breach, state is safely rolled back in LIFO order.</li>
-<li><strong>Binary Wire Protocol:</strong> Compact 20-byte fixed frame header supporting pipelined streaming I/O and zero-allocation frame decoding.</li>
+<li><strong>Partitioned Key-Space:</strong> Power-of-two sharding with independent
+<code>parking_lot::RwLock</code> instances reduces contention by isolating most
+operations to individual shards.</li>
+<li><strong>Payload-Byte Budgeting:</strong> Accounts for key and value bytes, excluding
+data-structure and allocator overhead. The budget is not a process-RSS limit.</li>
+<li><strong>Sampled LRU Eviction:</strong> Uses a dense key index for candidate sampling
+without scanning the entire hash map.</li>
+<li><strong>Atomic Batch Transactions:</strong> Single-shard batches use an undo log to
+restore prior state when an operation fails.</li>
+<li><strong>Binary Wire Protocol:</strong> A fixed 20-byte header supports incremental
+decoding and bounded request and response payloads.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="architecture--design"><a class="header" href="#architecture--design">Architecture &amp; Design</a></h1>
@@ -226,16 +232,19 @@
 <h2 id="architectural-principles"><a class="header" href="#architectural-principles">Architectural Principles</a></h2>
 <ol>
 <li>
-<p><strong>Zero Global Mutexes:</strong> Key-space partitioning across (N) shards distributes work across CPU cores while isolating synchronization to individual shards.</p>
+<p><strong>Shard-Scoped Synchronization:</strong> Most operations synchronize on the shard
+they access. Operations such as <code>RESET</code> acquire all shard locks in a
+consistent order.</p>
 </li>
 <li>
-<p><strong>Deterministic Payload Accounting:</strong> Shard memory tracking accounts for key and value slice byte lengths, keeping accounted memory usage within defined operational boundaries.</p>
+<p><strong>Payload-Byte Budgeting:</strong> Memory accounting tracks key and value byte
+lengths. It excludes hash-table/index capacity, entry metadata, allocator
+overhead, and other process allocations; it is not a strict RSS ceiling.
+The budget is divided among shards.</p>
 </li>
 <li>
-<p><strong>No Phantom Eviction in Transactions:</strong> Transactions cannot trigger inline LRU eviction. If a transaction exceeds available memory capacity, it aborts and restores the prior state rather than silently dropping existing keys.</p>
-</li>
-<li>
-<p><strong>Panic Isolation:</strong> Worker panics unwind through RAII transaction guards, applying inverse mutations in last-in, first-out (LIFO) order to restore the shard’s prior state.</p>
+<p><strong>Transactional Safety:</strong> Single-shard batches use inverse mutations to
+restore prior state when a transaction fails.</p>
 </li>
 </ol>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -247,7 +256,19 @@
 <li><strong>Byte Ordering:</strong> All multi-byte numerical fields (16-bit, 32-bit, and 64-bit) MUST be encoded in Big-Endian (Network Byte Order).</li>
 <li><strong>Framing Invariant:</strong> Every network message begins with a fixed 20-byte header. The header explicitly declares the payload byte length (<code>payload_len</code>), allowing decoders to determine frame boundaries before consuming variable-length payload bytes.</li>
 </ul>
-<h2 id="2-request-framing"><a class="header" href="#2-request-framing">2. Request Framing</a></h2>
+<h2 id="2-frame-and-payload-limits"><a class="header" href="#2-frame-and-payload-limits">2. Frame and Payload Limits</a></h2>
+<ul>
+<li>Every request and response begins with a 20-byte header.</li>
+<li>A frame payload must not exceed 64 MiB.</li>
+<li>A batch request or response array must contain no more than 64 operations
+or results.</li>
+<li>Decoders validate complete headers before waiting for payload bodies.</li>
+<li>Request flags must be zero.</li>
+<li>Fixed-width response payloads must have their exact defined lengths.</li>
+<li>Invalid lengths, malformed payloads, and unexpected trailing bytes are
+rejected.</li>
+</ul>
+<h2 id="3-request-framing"><a class="header" href="#3-request-framing">3. Request Framing</a></h2>
 <h3 id="header-layout-20-bytes"><a class="header" href="#header-layout-20-bytes">Header Layout (20 Bytes)</a></h3>
 <div class="table-wrapper">
 <table>
@@ -279,7 +300,7 @@
 </tbody>
 </table>
 </div>
-<h2 id="3-storage-operation-encoding"><a class="header" href="#3-storage-operation-encoding">3. Storage Operation Encoding</a></h2>
+<h2 id="4-storage-operation-encoding"><a class="header" href="#4-storage-operation-encoding">4. Storage Operation Encoding</a></h2>
 <p>When <code>command_type</code> is <code>Single</code> (<code>0x01</code>) or operations are included inside a <code>Batch</code> (<code>0x02</code>), each storage operation MUST use the following payload encoding.</p>
 <h3 id="operation-opcodes"><a class="header" href="#operation-opcodes">Operation Opcodes</a></h3>
 <div class="table-wrapper">
@@ -316,7 +337,7 @@
 [Encoded Operation N-1]
 </code></pre>
 <p>The item count specifies the number of encoded operations in the batch.</p>
-<h2 id="4-response-framing"><a class="header" href="#4-response-framing">4. Response Framing</a></h2>
+<h2 id="5-response-framing"><a class="header" href="#5-response-framing">5. Response Framing</a></h2>
 <h3 id="header-layout-20-bytes-1"><a class="header" href="#header-layout-20-bytes-1">Header Layout (20 Bytes)</a></h3>
 <div class="table-wrapper">
 <table>
@@ -372,17 +393,17 @@
 [Failure Status Code: 1B]
 </code></pre>
 <p>The failed index is zero-based and identifies the operation that triggered the failure.</p>
-<h2 id="5-shard-partitioning--transaction-invariants"><a class="header" href="#5-shard-partitioning--transaction-invariants">5. Shard Partitioning &amp; Transaction Invariants</a></h2>
-<h3 id="51-prefix-routing"><a class="header" href="#51-prefix-routing">5.1 Prefix Routing</a></h3>
+<h2 id="6-shard-partitioning--transaction-invariants"><a class="header" href="#6-shard-partitioning--transaction-invariants">6. Shard Partitioning &amp; Transaction Invariants</a></h2>
+<h3 id="61-prefix-routing"><a class="header" href="#61-prefix-routing">6.1 Prefix Routing</a></h3>
 <p>All keys are routed to a shard using the string prefix preceding the first colon (<code>:</code>).</p>
 <ul>
 <li><code>session:user_123</code> and <code>session:user_456</code> map to the same partition.</li>
 <li>If no colon exists (e.g., <code>counter</code>), the entire key string is hashed.</li>
 </ul>
-<h3 id="52-batch-single-shard-constraint"><a class="header" href="#52-batch-single-shard-constraint">5.2 Batch Single-Shard Constraint</a></h3>
+<h3 id="62-batch-single-shard-constraint"><a class="header" href="#62-batch-single-shard-constraint">6.2 Batch Single-Shard Constraint</a></h3>
 <p>Atomic batches (<code>0x02</code>) MUST NOT cross shard boundaries.</p>
 <p>If a batch contains keys that resolve to different shards, the server MUST abort before executing any mutations and return status code <code>0x32</code> (<code>CrossShardViolation</code>).</p>
-<h3 id="53-rollback-semantics"><a class="header" href="#53-rollback-semantics">5.3 Rollback Semantics</a></h3>
+<h3 id="63-rollback-semantics"><a class="header" href="#63-rollback-semantics">6.3 Rollback Semantics</a></h3>
 <p>If any operation in a batch produces a hard error, such as <code>StorageFull</code> or <code>KeyExists</code>, all previous mutations in that batch MUST be rolled back immediately.</p>
 <p>The server MUST return status code <code>0x34</code> (<code>BatchShortCircuited</code>) with a <code>BatchErr</code> payload identifying the failed operation and its failure status code.</p>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -527,6 +548,22 @@ AHashMap:          "user:2" =&gt; Entry {
 <li><strong>TaskTracker Barrier:</strong> The server closes its listener, allows in-flight operations to finish writing responses, and waits up to <code>shutdown_timeout_secs</code> before forcing process exit.</li>
 <li><strong>Buffer Compaction:</strong> Connections reclaim excess buffer capacity when processing large payloads expands internal buffers beyond 1 MB.</li>
 </ul>
+<h2 id="5-memory-accounting"><a class="header" href="#5-memory-accounting">5. Memory Accounting</a></h2>
+<p>Quty accounts for the byte lengths of keys and values. This is a payload-byte
+budget, not a strict process-memory ceiling. Hash-map buckets, dense-index
+storage, entry metadata, allocator overhead, and other process allocations
+are excluded.</p>
+<p>The configured budget is divided among shards. A shard may reach its budget
+even when other shards have unused capacity.</p>
+<h3 id="eviction-behavior"><a class="header" href="#eviction-behavior">Eviction Behavior</a></h3>
+<p>Before evicting entries to reclaim headroom, the eviction policy determines
+whether the selected candidates can free enough accounted bytes. If the
+capacity requirement cannot be satisfied, the operation fails without
+removing those candidates.</p>
+<h2 id="6-reset-semantics"><a class="header" href="#6-reset-semantics">6. RESET Semantics</a></h2>
+<p><code>RESET</code> acquires all shard write locks in ascending shard-index order, clears
+the shard contents, and resets hit, miss, and eviction counters. Uptime,
+total connections, and active-connection counts are preserved.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="client-driver--cli-guide-quty-client"><a class="header" href="#client-driver--cli-guide-quty-client">Client Driver &amp; CLI Guide (<code>quty-client</code>)</a></h1>
 <p>This document details the architecture, design choices, error-handling semantics, and execution modes of <code>quty-client</code>.</p>
@@ -635,9 +672,9 @@ echo "Query completed: $STATUS"
 <p>This client-side validation complements the server’s own shard-boundary enforcement and avoids unnecessary network round trips for invalid batches.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="performance--benchmarking-analysis"><a class="header" href="#performance--benchmarking-analysis">Performance &amp; Benchmarking Analysis</a></h1>
-<p>This document details the observed latency, throughput, and scalability profiles of <code>quty-server</code>, measured using the <code>quty-bench</code> load-testing harness.</p>
+<p>This document summarizes the observed throughput and latency of <code>quty-server</code> across read, write, mixed, skewed, pipelined, and transactional workloads. Results are specific to the hardware, software, configuration, and test methodology described below.</p>
 <h2 id="1-system-configuration"><a class="header" href="#1-system-configuration">1. System Configuration</a></h2>
-<p>All benchmarks were executed locally on the following hardware and software configuration.</p>
+<h3 id="hardware-and-software"><a class="header" href="#hardware-and-software">Hardware and software</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -656,7 +693,7 @@ echo "Query completed: $STATUS"
 </tbody>
 </table>
 </div>
-<h3 id="server-configuration"><a class="header" href="#server-configuration">Server Configuration</a></h3>
+<h3 id="server-configuration"><a class="header" href="#server-configuration">Server configuration</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -671,114 +708,121 @@ echo "Query completed: $STATUS"
 </tbody>
 </table>
 </div>
-<h3 id="test-methodology"><a class="header" href="#test-methodology">Test Methodology</a></h3>
+<h3 id="test-methodology"><a class="header" href="#test-methodology">Test methodology</a></h3>
 <ul>
-<li><strong>Warmup Phase:</strong> A 2-second unmeasured load phase before every run to prime OS TCP windows, warm CPU caches, and preallocate hash table buckets.</li>
-<li><strong>Database Reset:</strong> Server state was reset using the <code>RESET</code> command before each scenario, with prepopulation performed where required.</li>
-<li><strong>Measurement Resolution:</strong> Microsecond-resolution HDR Histogram tracking across concurrent client connections.</li>
-<li><strong>Test Duration:</strong> Approximately 10 seconds of continuous measurement per workload profile.</li>
+<li><strong>Warmup:</strong> A 2-second unmeasured load phase before each run.</li>
+<li><strong>Database reset:</strong> The server’s <code>RESET</code> command was used between scenarios, with prepopulation performed where required.</li>
+<li><strong>Measurement:</strong> Microsecond-resolution HDR Histogram measurements across concurrent client connections.</li>
+<li><strong>Duration:</strong> Approximately 10 seconds of measurement per workload.</li>
+<li><strong>Environment:</strong> Client and server ran locally over loopback TCP.</li>
 </ul>
-<h2 id="2-benchmark-results-summary"><a class="header" href="#2-benchmark-results-summary">2. Benchmark Results Summary</a></h2>
-<p>The following table summarizes observed throughput and latency percentiles across the benchmark matrix.</p>
+<p>These results describe a local benchmark environment. Loopback measurements exclude the network latency and variability associated with remote clients.</p>
+<h2 id="2-benchmark-results"><a class="header" href="#2-benchmark-results">2. Benchmark Results</a></h2>
+<p>The following table summarizes the measured results across the benchmark matrix.</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Scenario</th><th>Workload</th><th>Target Spec</th><th style="text-align: right">Duration</th><th style="text-align: right">Total Ops</th><th style="text-align: right">Throughput (ops/sec)</th><th style="text-align: right">p50</th><th style="text-align: right">p90</th><th style="text-align: right">p99</th><th style="text-align: right">p99.9</th><th style="text-align: right">Max</th></tr>
+<tr><th>Scenario</th><th>Workload</th><th>Pipeline / Clients</th><th style="text-align: right">Duration</th><th style="text-align: right">Total Requests</th><th style="text-align: right">Throughput (requests/s)</th><th style="text-align: right">p50</th><th style="text-align: right">p90</th><th style="text-align: right">p99</th><th style="text-align: right">p99.9</th><th style="text-align: right">Max</th></tr>
 </thead>
 <tbody>
-<tr><td>1A</td><td>100% Writes (<code>SET</code>)</td><td>P=16, C=50</td><td style="text-align: right">10.00 s</td><td style="text-align: right">22,522,384</td><td style="text-align: right">2,251,994.08</td><td style="text-align: right">19 µs</td><td style="text-align: right">35 µs</td><td style="text-align: right">57 µs</td><td style="text-align: right">82 µs</td><td style="text-align: right">235 µs</td></tr>
-<tr><td>1B</td><td>100% Reads (<code>GET</code>)</td><td>P=16, C=50</td><td style="text-align: right">10.00 s</td><td style="text-align: right">19,203,600</td><td style="text-align: right">1,920,139.68</td><td style="text-align: right">23 µs</td><td style="text-align: right">42 µs</td><td style="text-align: right">67 µs</td><td style="text-align: right">93 µs</td><td style="text-align: right">208 µs</td></tr>
-<tr><td>1C</td><td>Mixed (80% Read / 20% Write)</td><td>P=16, C=50</td><td style="text-align: right">10.00 s</td><td style="text-align: right">18,672,416</td><td style="text-align: right">1,867,099.17</td><td style="text-align: right">24 µs</td><td style="text-align: right">43 µs</td><td style="text-align: right">68 µs</td><td style="text-align: right">98 µs</td><td style="text-align: right">293 µs</td></tr>
-<tr><td>2A</td><td>Mixed (Zipfian 80/20 Skew)</td><td>P=16, C=50</td><td style="text-align: right">10.01 s</td><td style="text-align: right">17,490,656</td><td style="text-align: right">1,747,944.06</td><td style="text-align: right">25 µs</td><td style="text-align: right">46 µs</td><td style="text-align: right">75 µs</td><td style="text-align: right">111 µs</td><td style="text-align: right">299 µs</td></tr>
-<tr><td>3A</td><td>Pipeline Depth = 1 (Latency)</td><td>P=1, C=50</td><td style="text-align: right">10.00 s</td><td style="text-align: right">1,638,786</td><td style="text-align: right">163,864.11</td><td style="text-align: right">266 µs</td><td style="text-align: right">542 µs</td><td style="text-align: right">791 µs</td><td style="text-align: right">1,136 µs</td><td style="text-align: right">15.77 ms</td></tr>
-<tr><td>3B</td><td>Pipeline Depth = 32 (Throughput)</td><td>P=32, C=50</td><td style="text-align: right">10.00 s</td><td style="text-align: right">25,857,504</td><td style="text-align: right">2,585,439.29</td><td style="text-align: right">17 µs</td><td style="text-align: right">31 µs</td><td style="text-align: right">50 µs</td><td style="text-align: right">80 µs</td><td style="text-align: right">276 µs</td></tr>
-<tr><td>4A</td><td>Atomic Batch Commits</td><td>P=8, C=30</td><td style="text-align: right">10.00 s</td><td style="text-align: right">7,943,792</td><td style="text-align: right">794,299.51</td><td style="text-align: right">32 µs</td><td style="text-align: right">59 µs</td><td style="text-align: right">101 µs</td><td style="text-align: right">156 µs</td><td style="text-align: right">428 µs</td></tr>
-<tr><td>4B</td><td>Atomic Batch Rollbacks</td><td>P=8, C=30</td><td style="text-align: right">10.00 s</td><td style="text-align: right">8,203,000</td><td style="text-align: right">820,223.84</td><td style="text-align: right">31 µs</td><td style="text-align: right">58 µs</td><td style="text-align: right">99 µs</td><td style="text-align: right">153 µs</td><td style="text-align: right">565 µs</td></tr>
+<tr><td>1A</td><td>100% Writes (<code>SET</code>)</td><td>P=16, C=50</td><td style="text-align: right">10.00 s</td><td style="text-align: right">23,446,752</td><td style="text-align: right">2,344,423</td><td style="text-align: right">18 µs</td><td style="text-align: right">35 µs</td><td style="text-align: right">57 µs</td><td style="text-align: right">92 µs</td><td style="text-align: right">854 µs</td></tr>
+<tr><td>1B</td><td>100% Reads (<code>GET</code>)</td><td>P=16, C=50</td><td style="text-align: right">10.00 s</td><td style="text-align: right">20,899,472</td><td style="text-align: right">2,089,741</td><td style="text-align: right">21 µs</td><td style="text-align: right">39 µs</td><td style="text-align: right">64 µs</td><td style="text-align: right">106 µs</td><td style="text-align: right">798 µs</td></tr>
+<tr><td>1C</td><td>Mixed (80% Read / 20% Write)</td><td>P=16, C=50</td><td style="text-align: right">10.00 s</td><td style="text-align: right">20,339,488</td><td style="text-align: right">2,033,806</td><td style="text-align: right">21 µs</td><td style="text-align: right">40 µs</td><td style="text-align: right">65 µs</td><td style="text-align: right">100 µs</td><td style="text-align: right">259 µs</td></tr>
+<tr><td>2A</td><td>Mixed (Zipfian 80/20 Skew)</td><td>P=16, C=50</td><td style="text-align: right">10.00 s</td><td style="text-align: right">19,136,608</td><td style="text-align: right">1,913,596</td><td style="text-align: right">22 µs</td><td style="text-align: right">42 µs</td><td style="text-align: right">71 µs</td><td style="text-align: right">112 µs</td><td style="text-align: right">844 µs</td></tr>
+<tr><td>3A</td><td>Unpipelined (P=1)</td><td>P=1, C=50</td><td style="text-align: right">10.00 s</td><td style="text-align: right">1,701,570</td><td style="text-align: right">170,139</td><td style="text-align: right">250 µs</td><td style="text-align: right">518 µs</td><td style="text-align: right">791 µs</td><td style="text-align: right">1,887 µs</td><td style="text-align: right">13.42 ms</td></tr>
+<tr><td>3B</td><td>Deep Pipelining (P=32)</td><td>P=32, C=50</td><td style="text-align: right">10.00 s</td><td style="text-align: right">28,074,464</td><td style="text-align: right">2,807,208</td><td style="text-align: right">15 µs</td><td style="text-align: right">28 µs</td><td style="text-align: right">51 µs</td><td style="text-align: right">90 µs</td><td style="text-align: right">822 µs</td></tr>
+<tr><td>4A</td><td>Atomic Batch Commits</td><td>P=8, C=30</td><td style="text-align: right">10.00 s</td><td style="text-align: right">8,441,832</td><td style="text-align: right">844,106</td><td style="text-align: right">30 µs</td><td style="text-align: right">57 µs</td><td style="text-align: right">98 µs</td><td style="text-align: right">162 µs</td><td style="text-align: right">658 µs</td></tr>
+<tr><td>4B</td><td>Atomic Batch Rollbacks</td><td>P=8, C=30</td><td style="text-align: right">10.00 s</td><td style="text-align: right">9,152,648</td><td style="text-align: right">915,175</td><td style="text-align: right">28 µs</td><td style="text-align: right">52 µs</td><td style="text-align: right">88 µs</td><td style="text-align: right">139 µs</td><td style="text-align: right">472 µs</td></tr>
 </tbody>
 </table>
 </div>
-<p><strong>Legend:</strong> <code>P</code> = pipeline depth; <code>C</code> = concurrent clients. Latency values are reported in microseconds except where explicitly indicated.</p>
-<h2 id="3-invariant--architecture-analysis"><a class="header" href="#3-invariant--architecture-analysis">3. Invariant &amp; Architecture Analysis</a></h2>
-<h3 id="31-lock-sharding-and-concurrency"><a class="header" href="#31-lock-sharding-and-concurrency">3.1 Lock Sharding and Concurrency</a></h3>
-<p>Across read-only and write-only workloads, the 64-shard architecture delivers high throughput under concurrent load.</p>
-<p><strong>100% SET (Scenario 1A)</strong></p>
-<ul>
-<li>Throughput: 2.25 million operations/sec.</li>
-<li>Median latency: 19 µs.</li>
-<li>p99 latency: 57 µs.</li>
-</ul>
-<p>Shard writes operate within independently locked memory domains, allowing concurrent workers to mutate keys in different shards without contending on a single global lock.</p>
-<p><strong>100% GET (Scenario 1B)</strong></p>
-<ul>
-<li>Throughput: 1.92 million operations/sec.</li>
-<li>Median latency: 23 µs.</li>
-<li>p99 latency: 67 µs.</li>
-</ul>
-<p>Read recency updates use relaxed atomic clock stores through <code>AtomicU32</code>, allowing reads to share <code>parking_lot::RwLock</code> read locks without requiring exclusive access for each recency update.</p>
-<h3 id="32-pipeline-depth-vs-latency-trade-offs"><a class="header" href="#32-pipeline-depth-vs-latency-trade-offs">3.2 Pipeline Depth vs. Latency Trade-Offs</a></h3>
-<p>Comparing Scenarios 3A, 1C, and 3B illustrates the impact of TCP pipelining and syscall overhead.</p>
-<p><strong>Unpipelined Execution (P=1, Scenario 3A)</strong></p>
-<ul>
-<li>Throughput: 163.8K operations/sec.</li>
-<li>p50 latency: 266 µs.</li>
-<li>p99 latency: 791 µs.</li>
-</ul>
-<p>Each operation requires an individual request-response exchange, increasing the relative cost of network I/O and syscall transitions.</p>
-<p><strong>Moderate Pipelining (P=16, Scenario 1C)</strong></p>
-<ul>
-<li>Throughput: 1.86 million operations/sec.</li>
-<li>Median latency: 24 µs.</li>
-<li>Throughput improvement: approximately 11.4× over unpipelined execution.</li>
-</ul>
-<p><strong>Deep Pipelining (P=32, Scenario 3B)</strong></p>
-<ul>
-<li>Throughput: 2.58 million operations/sec.</li>
-<li>Median latency: 17 µs.</li>
-<li>p99 latency: 50 µs.</li>
-</ul>
-<p>Amortizing syscall and transport overhead across multiple commands allows the Tokio event loop and socket buffers to process requests more efficiently.</p>
-<p>These results demonstrate the throughput benefits of pipelining under this test configuration; they do not independently establish that the server is operating at memory-bandwidth limits.</p>
-<h3 id="33-transaction--rollback-invariants"><a class="header" href="#33-transaction--rollback-invariants">3.3 Transaction &amp; Rollback Invariants</a></h3>
-<p>Scenarios 4A and 4B measure single-shard multi-operation atomic batches.</p>
-<p><strong>Batch Commits (Scenario 4A)</strong></p>
-<ul>
-<li>Batch throughput: 794.2K batch requests/sec.</li>
-<li>Operations per batch: 3 (<code>SET</code>, <code>SET</code>, <code>GET</code>).</li>
-<li>Equivalent throughput: approximately 2.38 million sub-operations/sec.</li>
-<li>p99 latency: 101 µs.</li>
-</ul>
-<p>Each batch targets keys sharing a routing prefix and executes within a single shard.</p>
-<p><strong>Batch Rollbacks (Scenario 4B)</strong></p>
-<ul>
-<li>Rollback throughput: 820.2K batch requests/sec.</li>
-<li>p99 latency: 99 µs.</li>
-</ul>
-<p>Deliberately engineered <code>ADD</code> collisions trigger short-circuit failures on the final operation, causing the <code>RollbackGuard</code> to unwind the undo stack in reverse order.</p>
-<p>Stack-allocated inverse logs using <code>SmallVec&lt;UndoRecord, 16&gt;</code> are intended to minimize allocation overhead during transaction execution and rollback.</p>
-<p>The measured throughput and latency are comparable between the two scenarios. These results alone do not establish that rollback incurs no measurable penalty; a controlled comparison with repeated trials and uncertainty estimates would be needed to support that conclusion.</p>
+<p><strong>Legend:</strong> P = pipeline depth; C = concurrent clients. Latency values are in microseconds unless otherwise indicated. For batch scenarios, throughput counts batch requests, not individual operations inside each batch.</p>
+<h2 id="3-performance-analysis"><a class="header" href="#3-performance-analysis">3. Performance Analysis</a></h2>
+<h3 id="31-read-and-write-throughput"><a class="header" href="#31-read-and-write-throughput">3.1 Read and write throughput</a></h3>
+<p><strong>Write-heavy workload</strong></p>
+<p>The <code>SET</code> workload reached approximately <strong>2.34 million requests/s</strong>, with p50 latency of 18 µs and p99 latency of 57 µs.</p>
+<p><strong>Read-heavy workload</strong></p>
+<p>The <code>GET</code> workload reached approximately <strong>2.09 million requests/s</strong>, with p50 latency of 21 µs and p99 latency of 64 µs.</p>
+<p>These results are consistent with an architecture designed to reduce contention through independently locked storage shards. They do not, by themselves, isolate the contribution of sharding from the effects of pipelining, client concurrency, allocator behavior, or other implementation details.</p>
+<p>Read recency tracking uses relaxed atomic updates through <code>AtomicU32</code>, allowing the relevant recency update to avoid requiring an exclusive lock solely for that update. This design choice may help reduce read-side contention.</p>
+<h3 id="32-mixed-and-skewed-workloads"><a class="header" href="#32-mixed-and-skewed-workloads">3.2 Mixed and skewed workloads</a></h3>
+<p>The mixed workload reached approximately <strong>2.03 million requests/s</strong>, with p99 latency of 65 µs.</p>
+<p>The Zipfian-skew workload reached approximately <strong>1.91 million requests/s</strong>, with p99 latency of 71 µs.</p>
+<p>The lower throughput and higher tail latency under skew are consistent with increased contention when a disproportionate share of operations targets a smaller subset of keys. The results alone do not quantify how much of the difference is caused by shard contention versus other workload effects.</p>
+<h3 id="33-pipeline-depth-and-throughput"><a class="header" href="#33-pipeline-depth-and-throughput">3.3 Pipeline depth and throughput</a></h3>
+<p>The unpipelined workload reached approximately <strong>170,139 requests/s</strong>, compared with approximately <strong>2.81 million requests/s</strong> at pipeline depth 32.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: right">Pipeline depth</th><th style="text-align: right">Throughput</th><th style="text-align: right">p50 latency</th><th style="text-align: right">p99 latency</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: right">1</td><td style="text-align: right">170,139 requests/s</td><td style="text-align: right">250 µs</td><td style="text-align: right">791 µs</td></tr>
+<tr><td style="text-align: right">16</td><td style="text-align: right">2,033,806 requests/s</td><td style="text-align: right">21 µs</td><td style="text-align: right">65 µs</td></tr>
+<tr><td style="text-align: right">32</td><td style="text-align: right">2,807,208 requests/s</td><td style="text-align: right">15 µs</td><td style="text-align: right">51 µs</td></tr>
+</tbody>
+</table>
+</div>
+<p>The measured throughput at pipeline depth 32 is approximately <strong>16.5×</strong> the unpipelined result. This demonstrates a substantial throughput benefit from pipelining in this test configuration.</p>
+<p>Pipelining amortizes per-request transport and syscall overhead across multiple requests. However, pipeline depth also changes the timing and batching characteristics of the workload, so the latency figures should not be interpreted as a direct comparison of isolated single-request response times under otherwise identical conditions.</p>
+<p>These results do not independently establish that the server is memory-bandwidth-bound or has reached its maximum throughput.</p>
+<h3 id="34-atomic-batch-commits-and-rollbacks"><a class="header" href="#34-atomic-batch-commits-and-rollbacks">3.4 Atomic batch commits and rollbacks</a></h3>
+<p>The batch workloads use three operations per batch for the commit scenario (<code>SET</code>, <code>SET</code>, <code>GET</code>) and deliberately trigger a failure on the final operation in the rollback scenario.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Scenario</th><th style="text-align: right">Batch throughput</th><th style="text-align: right">p50 latency</th><th style="text-align: right">p99 latency</th></tr>
+</thead>
+<tbody>
+<tr><td>Batch commits</td><td style="text-align: right">844,106 batches/s</td><td style="text-align: right">30 µs</td><td style="text-align: right">98 µs</td></tr>
+<tr><td>Batch rollbacks</td><td style="text-align: right">915,175 batches/s</td><td style="text-align: right">28 µs</td><td style="text-align: right">88 µs</td></tr>
+</tbody>
+</table>
+</div>
+<p>With three operations per committed batch, the commit result corresponds to approximately <strong>2.53 million sub-operations/s</strong>, assuming all three operations are counted as one sub-operation each.</p>
+<p>The rollback path uses a <code>RollbackGuard</code> and an undo stack backed by <code>SmallVec&lt;UndoRecord, 16&gt;</code>, intended to reduce allocation overhead for small transactions.</p>
+<p>The observed rollback throughput is higher than commit throughput in this run. That does <strong>not</strong> establish that rollback is intrinsically faster or incurs no performance penalty: the workloads perform different amounts of work. Repeated trials and comparable transaction paths would be required to draw that conclusion.</p>
+<p>The results apply to the tested single-shard batch model and should not be interpreted as evidence of cross-shard transaction support.</p>
 <h2 id="4-reproducing-the-benchmarks"><a class="header" href="#4-reproducing-the-benchmarks">4. Reproducing the Benchmarks</a></h2>
-<h3 id="41-start-the-server"><a class="header" href="#41-start-the-server">4.1 Start the Server</a></h3>
-<p>Build the optimized server and launch it with the benchmark configuration:</p>
+<h3 id="41-build-and-start-the-server"><a class="header" href="#41-build-and-start-the-server">4.1 Build and start the server</a></h3>
+<p>Build the optimized server:</p>
 <pre><code class="language-bash">cargo build --release -p quty-server
-
-./target/release/quty-server \
+</code></pre>
+<p>Start it with the benchmark configuration:</p>
+<pre><code class="language-bash">./target/release/quty-server \
     --bind 127.0.0.1:6379 \
     --shards 64 \
     --max-memory 1GB
 </code></pre>
-<h3 id="42-run-the-automated-benchmark-suite"><a class="header" href="#42-run-the-automated-benchmark-suite">4.2 Run the Automated Benchmark Suite</a></h3>
-<p>In another terminal, execute the benchmark runner:</p>
+<p>Confirm that the server’s supported command-line arguments match the flags above before running the suite.</p>
+<h3 id="42-run-the-benchmark-suite"><a class="header" href="#42-run-the-benchmark-suite">4.2 Run the benchmark suite</a></h3>
+<p>In another terminal, execute:</p>
 <pre><code class="language-bash">./quty-bench/scripts/run_benches.sh
 </code></pre>
-<p>The benchmark harness runs the configured workload scenarios and measures throughput and latency under concurrent load.</p>
-<h2 id="5-results-interpretation"><a class="header" href="#5-results-interpretation">5. Results Interpretation</a></h2>
-<p>The observed results highlight three primary characteristics of <code>quty-server</code> under the tested conditions:</p>
+<p>The runner executes the configured workload scenarios and reports throughput and latency measurements.</p>
+<p>For meaningful comparisons:</p>
+<ul>
+<li>Use the same server build, machine, and configuration.</li>
+<li>Keep concurrency, pipeline depth, key distribution, and payload sizes consistent.</li>
+<li>Ensure the database reset and any prepopulation finish before measurement begins.</li>
+<li>Run each scenario multiple times and compare medians across runs.</li>
+<li>Record failures and incomplete runs rather than treating partial results as successful benchmarks.</li>
+<li>Verify that latency percentiles represent per-request measurements rather than an aggregate pipeline duration divided by pipeline depth.</li>
+</ul>
+<h2 id="5-limitations"><a class="header" href="#5-limitations">5. Limitations</a></h2>
+<p>These results should be interpreted with the following limitations in mind:</p>
 <ol>
-<li><strong>High concurrent throughput:</strong> Independent shard locks allow parallel operations without requiring a single global storage lock.</li>
-<li><strong>Pipelining efficiency:</strong> Increasing pipeline depth substantially improves throughput by amortizing per-request transport and syscall overhead.</li>
-<li><strong>Transaction processing:</strong> Atomic batch commits and rollbacks sustain high request rates while preserving the intended single-shard transaction model.</li>
+<li><strong>Local-only testing:</strong> Loopback TCP does not represent remote network latency or network congestion.</li>
+<li><strong>Hardware specificity:</strong> Results depend on the CPU, memory, operating system, runtime, allocator, and server configuration.</li>
+<li><strong>Workload dependence:</strong> Key distribution, operation mix, pipeline depth, and concurrency materially affect results.</li>
+<li><strong>Short measurement windows:</strong> Approximately 10 seconds per workload may not reveal long-running behavior, sustained memory pressure, or periodic latency spikes.</li>
+<li><strong>Statistical uncertainty:</strong> A single reported result does not establish run-to-run variance or reproducibility.</li>
+<li><strong>No universal comparison:</strong> These measurements cannot establish superiority over other cache engines without equivalent workloads, configurations, and measurement procedures.</li>
 </ol>
-<p>These measurements are specific to the listed hardware, software, server configuration, and benchmark methodology. They should be treated as local benchmark results rather than universal performance guarantees. Comparisons with other cache engines should use identical workloads, concurrency levels, data distributions, and measurement procedures.</p>
+<h2 id="6-summary"><a class="header" href="#6-summary">6. Summary</a></h2>
+<p>The benchmark suite demonstrates high local request throughput for <code>quty-server</code> under concurrent, pipelined workloads. The highest measured throughput was approximately <strong>2.81 million requests/s</strong> at pipeline depth 32. The read, write, and mixed workloads also exceeded two million requests/s in the reported runs.</p>
+<p>Pipelining produced the largest observed throughput difference, while skewed access and batch execution provided additional information about the system’s behavior under different workload patterns.</p>
+<p>These figures are local benchmark observations, not universal performance guarantees. Repeated trials, verified per-request latency measurements, and controlled comparisons are necessary for stronger performance claims.</p>
 
                     </main>
 

@@ -39,11 +39,15 @@
 
 ## Architectural Principles
 
-1. **Zero Global Mutexes:** Key-space partitioning across \(N\) shards distributes work across CPU cores while isolating synchronization to individual shards.
+1. **Shard-Scoped Synchronization:** Most operations synchronize on the shard
+	 they access. Operations such as `RESET` acquire all shard locks in a
+	 consistent order.
 
-2. **Deterministic Payload Accounting:** Shard memory tracking accounts for key and value slice byte lengths, keeping accounted memory usage within defined operational boundaries.
+2. **Payload-Byte Budgeting:** Memory accounting tracks key and value byte
+	 lengths. It excludes hash-table/index capacity, entry metadata, allocator
+	 overhead, and other process allocations; it is not a strict RSS ceiling.
+	 The budget is divided among shards.
 
-3. **No Phantom Eviction in Transactions:** Transactions cannot trigger inline LRU eviction. If a transaction exceeds available memory capacity, it aborts and restores the prior state rather than silently dropping existing keys.
-
-4. **Panic Isolation:** Worker panics unwind through RAII transaction guards, applying inverse mutations in last-in, first-out (LIFO) order to restore the shard's prior state.
+3. **Transactional Safety:** Single-shard batches use inverse mutations to
+	 restore prior state when a transaction fails.
 

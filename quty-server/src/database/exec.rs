@@ -689,14 +689,19 @@ mod tests {
 				UndoRecord::Delete { key } => {
 					shard.remove(&key);
 				}
-				UndoRecord::RevertExpiry { key, previous_deadline } => {
+				UndoRecord::RevertExpiry {
+					key,
+					previous_deadline,
+				} => {
 					shard.revert_expiry(&key, previous_deadline);
 				}
 			}
 		}
 
 		// 4. Assert: Value, original TTL, and original recency clock must be restored
-		let restored_entry = shard.entry("k:cold").expect("Key must exist after rollback");
+		let restored_entry = shard
+			.entry("k:cold")
+			.expect("Key must exist after rollback");
 		assert_eq!(restored_entry.value, Bytes::from_static(b"original_value"));
 		assert_eq!(
 			restored_entry.expires_at,

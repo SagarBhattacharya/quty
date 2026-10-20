@@ -6,9 +6,7 @@
 
 use crate::command::{Command, CommandType, Operation, OperationDecodeError};
 use crate::constants::{
-	MAX_BATCH_OPERATIONS, PROTOCOL_MAGIC,
-	PROTOCOL_VERSION_V1, REQUEST_HEADER_SIZE,
-	MAX_PAYLOAD_SIZE
+	MAX_BATCH_OPERATIONS, MAX_PAYLOAD_SIZE, PROTOCOL_MAGIC, PROTOCOL_VERSION_V1, REQUEST_HEADER_SIZE,
 };
 use crate::to_u32_len;
 use bytes::{Buf, BufMut, BytesMut};
@@ -149,6 +147,11 @@ impl Request {
 			return Ok(None);
 		}
 
+		let flags = u8::from_be_bytes([src[7]]);
+		if flags != 0 {
+			return Err(RequestDecodeError::InvalidFlags(flags));
+		}
+
 		// Peek payload length from bytes 16..20 without advancing buffer cursor
 		let payload_len = u32::from_be_bytes([src[16], src[17], src[18], src[19]]) as usize;
 		if payload_len > MAX_PAYLOAD_SIZE {
@@ -164,10 +167,6 @@ impl Request {
 		}
 
 		let header = RequestHeader::decode(src)?;
-		if header.flags != 0 {
-			return Err(RequestDecodeError::InvalidFlags(header.flags));
-		}
-
 		let mut payload = src.split_to(payload_len);
 
 		let command = match header.command_type {
@@ -176,19 +175,19 @@ impl Request {
 					return Err(RequestDecodeError::UnexpectedPayload);
 				}
 				Command::Ping
-			},
+			}
 			CommandType::Stats => {
 				if payload_len != 0 {
 					return Err(RequestDecodeError::UnexpectedPayload);
 				}
 				Command::Stats
-			},
+			}
 			CommandType::Reset => {
 				if payload_len != 0 {
 					return Err(RequestDecodeError::UnexpectedPayload);
 				}
 				Command::Reset
-			},
+			}
 			CommandType::Single => {
 				let op = Operation::decode(&mut payload)?;
 				if payload.has_remaining() {
@@ -266,20 +265,19 @@ pub enum RequestDecodeError {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use bytes::BytesMut;
 	use crate::constants::MAX_BATCH_OPERATIONS;
+	use bytes::BytesMut;
 
 	fn make_test_batch_bytes(count: usize) -> BytesMut {
 		let mut buf = BytesMut::new();
 		let mut ops = Vec::with_capacity(count);
 		for i in 0..count {
-			ops.push(Operation::Get { key: format!("s00:k:{i}") });
+			ops.push(Operation::Get {
+				key: format!("s00:k:{i}"),
+			});
 		}
 
-		let request = Request::new(
-			1,
-			Command::Batch(ops)
-		);
+		let request = Request::new(1, Command::Batch(ops));
 		request.encode(&mut buf);
 		buf
 	}
@@ -289,7 +287,10 @@ mod tests {
 		// Exactly at max limit: 64 operations
 		let mut valid_buf = make_test_batch_bytes(MAX_BATCH_OPERATIONS);
 		let decoded = Request::decode(&mut valid_buf);
-		assert!(decoded.is_ok(), "Batch of exactly MAX_BATCH_SIZE should decode successfully");
+		assert!(
+			decoded.is_ok(),
+			"Batch of exactly MAX_BATCH_SIZE should decode successfully"
+		);
 	}
 
 	#[test]

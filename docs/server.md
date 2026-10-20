@@ -162,3 +162,25 @@ Batch operations execute atomically within a single shard using an inverse mutat
 - **TaskTracker Barrier:** The server closes its listener, allows in-flight operations to finish writing responses, and waits up to `shutdown_timeout_secs` before forcing process exit.
 - **Buffer Compaction:** Connections reclaim excess buffer capacity when processing large payloads expands internal buffers beyond 1 MB.
 
+## 5. Memory Accounting
+
+Quty accounts for the byte lengths of keys and values. This is a payload-byte
+budget, not a strict process-memory ceiling. Hash-map buckets, dense-index
+storage, entry metadata, allocator overhead, and other process allocations
+are excluded.
+
+The configured budget is divided among shards. A shard may reach its budget
+even when other shards have unused capacity.
+
+### Eviction Behavior
+
+Before evicting entries to reclaim headroom, the eviction policy determines
+whether the selected candidates can free enough accounted bytes. If the
+capacity requirement cannot be satisfied, the operation fails without
+removing those candidates.
+
+## 6. RESET Semantics
+
+`RESET` acquires all shard write locks in ascending shard-index order, clears
+the shard contents, and resets hit, miss, and eviction counters. Uptime,
+total connections, and active-connection counts are preserved.

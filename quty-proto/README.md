@@ -14,9 +14,16 @@ network sockets, runtime executors, or engine storage internals.
 - **Magic Identifier:** `0x51555459` (ASCII `"QUTY"`).
 - **Protocol Version:** `0x0001` (v1).
 - **Framing:** Fixed 20-byte header preceding an optional variable-length payload.
-- **Maximum Key Size:** 64 KB (65,536 bytes).
-- **Maximum Value Size:** 32 MB (33,554,432 bytes).
-- **Maximum Batch Operations:** 65,536 sub-operations per batch transaction.
+- **Maximum Key Size:** 64 KiB (65,536 bytes).
+- **Maximum Value Size:** 32 MiB (33,554,432 bytes).
+- **Maximum Batch Operations:** 64 sub-operations per batch transaction.
+- **Maximum Frame Payload:** 64 MiB per request or response frame.
+
+The decoder supports incremental TCP stream processing. Once the complete
+20-byte header is available, it validates the header and rejects payload
+lengths above 64 MiB before waiting for the body. Request flags must be zero.
+Malformed fixed-width payloads, invalid batch counts, and unexpected trailing
+bytes are rejected.
 
 ## Wire Frame Layouts
 

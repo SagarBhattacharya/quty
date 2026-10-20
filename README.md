@@ -14,7 +14,9 @@ A high-performance, sharded in-memory cache server written in Rust, featuring de
 - **Concurrent Reads:** `GET` operations use shared read locks, with recency clocks updated through relaxed atomic stores.
 - **Atomic Batch Transactions:** Single-shard atomic sequences (`BATCH`) backed by an inverse undo stack (`RollbackGuard`). Precondition failures and capacity limits trigger automatic LIFO rollback.
 - **Sampled LRU Eviction:** Uniform candidate sampling through a dense key index, maintaining O(1) amortized `swap_remove` operations without full-map iteration.
-- **Deterministic Memory Accounting:** Tracks key and value payload bytes, with self-eviction protection to prevent overwrites from evicting their own entries.
+- **Payload-Byte Budgeting:** Tracks key and value bytes. Data-structure and
+	allocator overhead are excluded, so the configured budget is not a hard
+	process-memory or RSS ceiling.
 - **Custom Binary Protocol:** Compact 20-byte frame header supporting pipelined, stream-oriented I/O.
 - **Jemalloc Integration:** Uses `tikv-jemallocator` as the memory allocator to help manage heap fragmentation under sustained write workloads.
 
@@ -133,21 +135,21 @@ evictions:             0
 
 ## Command Reference
 
-| Command   | Arguments           | Behavior                                                                  |
-|-----------|---------------------|---------------------------------------------------------------------------|
-| `PING`    | None                | Checks TCP connection liveness.                                           |
-| `SET`     | `<key> <val>`       | Unconditional key-value upsert.                                           |
-| `GET`     | `<key>`             | Retrieves a value and updates the LRU recency clock.                      |
-| `ADD`     | `<key> <val>`       | Stores a value only if the key does not exist or has expired.             |
-| `REPLACE` | `<key> <val>`       | Updates a value only if the key currently exists.                         |
-| `DEL`     | `<key>`             | Deletes a key and reclaims accounted payload memory.                      |
-| `EXISTS`  | `<key>`             | Checks key presence without altering LRU order.                           |
-| `TTL`     | `<key>`             | Returns the remaining lifespan in milliseconds (`-1` if persistent).      |
-| `EXPIRE`  | `<key> <ms>`        | Sets an expiration deadline in milliseconds.                              |
-| `PERSIST` | `<key>`             | Clears the expiration deadline, keeping the key persistent.               |
-| `BATCH`   | `(cmd1, cmd2, ...)` | Executes an atomic transaction on a single shard, with rollback on error. |
-| `STATS`   | None                | Retrieves a telemetry snapshot.                                           |
-| `RESET`   | None                | Flushes all partition shards and clears metrics.                          |
+| Command   | Arguments           | Behavior                                                                                                                |
+|-----------|---------------------|-------------------------------------------------------------------------------------------------------------------------|
+| `PING`    | None                | Checks TCP connection liveness.                                                                                         |
+| `SET`     | `<key> <val>`       | Unconditional key-value upsert.                                                                                         |
+| `GET`     | `<key>`             | Retrieves a value and updates the LRU recency clock.                                                                    |
+| `ADD`     | `<key> <val>`       | Stores a value only if the key does not exist or has expired.                                                           |
+| `REPLACE` | `<key> <val>`       | Updates a value only if the key currently exists.                                                                       |
+| `DEL`     | `<key>`             | Deletes a key and reclaims accounted payload memory.                                                                    |
+| `EXISTS`  | `<key>`             | Checks key presence without altering LRU order.                                                                         |
+| `TTL`     | `<key>`             | Returns the remaining lifespan in milliseconds (`-1` if persistent).                                                    |
+| `EXPIRE`  | `<key> <ms>`        | Sets an expiration deadline in milliseconds.                                                                            |
+| `PERSIST` | `<key>`             | Clears the expiration deadline, keeping the key persistent.                                                             |
+| `BATCH`   | `(cmd1, cmd2, ...)` | Executes an atomic transaction on a single shard, with rollback on error.                                               |
+| `STATS`   | None                | Retrieves a telemetry snapshot.                                                                                         |
+| `RESET`   | None                | Atomically clears all shards and resets hit, miss, and eviction counters. Uptime and connection counters are preserved. |
 
 ---
 

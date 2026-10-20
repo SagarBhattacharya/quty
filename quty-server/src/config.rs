@@ -139,6 +139,10 @@ impl ServerConfig {
 			return Err("Low watermark must be strictly less than high watermark".into());
 		}
 
+		if args.sweep_interval_ms == 0 {
+			return Err("Sweep interval must be greater than zero milliseconds".into());
+		}
+
 		Ok(Self {
 			bind_addr: args.bind_addr,
 			sweep_interval_ms: args.sweep_interval_ms,

@@ -5,12 +5,21 @@ A high-performance, multithreaded in-memory cache server featuring lock-isolated
 ## Architecture Highlights
 
 - **Key-Space Partitioning:** Automatic power-of-two sharding using `ahash`, with per-shard `parking_lot::RwLock` instances to minimize cross-thread contention.
-- **Deterministic Memory Model:** Explicit accounting for key and value payload bytes, with inline headroom eviction and background watermark enforcement.
 - **O(1) Dense Key Sampling:** Memory-efficient candidate selection via an indexed `Vec<Box<str>>`, maintaining O(1) amortized `swap_remove` operations.
 - **Unified Mutation Engine:** A single execution pipeline for both standalone commands and batch transactions.
 - **RAII Transaction Rollback:** Atomic multi-operation batches on shared key prefixes, with rollback on precondition failures or worker-thread panics.
 - **Hybrid Expiration:** Passive lazy evaluation on reads, coupled with a non-blocking active background sweep task.
 - **Supervised Network Daemon:** Non-blocking Tokio TCP listener supporting graceful shutdown on both `SIGINT` and `SIGTERM`.
+
+### Memory Budget
+
+The configured memory budget accounts for key and value payload bytes. It is
+not a hard process-memory or RSS limit: hash-table buckets, dense-index storage,
+entry metadata, allocator overhead, and other runtime allocations are excluded.
+
+The aggregate budget is divided among shards. Unused capacity in one shard
+does not automatically become available to another shard, so a heavily loaded
+shard may reject writes while other shards still have unused budget.
 
 ## Installation & Build
 
@@ -123,18 +132,18 @@ RUST_LOG=info,quty_server=debug ./target/release/quty-server \
 
 ## Supported Command Verbs
 
-| Command   | Arguments           | Semantics                                                                             |
-|-----------|---------------------|---------------------------------------------------------------------------------------|
-| `PING`    | None                | Liveness check. Returns `StatusCode::Ok`.                                             |
-| `GET`     | `<key>`             | Fetches cached binary payload and updates the LRU recency clock.                      |
-| `SET`     | `<key> <val>`       | Unconditional storage upsert.                                                         |
-| `ADD`     | `<key> <val>`       | Inserts payload only if the key is missing or expired; otherwise returns `KeyExists`. |
-| `REPLACE` | `<key> <val>`       | Updates payload only if the key is active; otherwise returns `KeyNotFound`.           |
-| `DEL`     | `<key>`             | Removes the key and immediately reclaims accounted payload memory.                    |
-| `EXISTS`  | `<key>`             | Checks key presence without altering the LRU access clock.                            |
-| `TTL`     | `<key>`             | Queries remaining lifespan in milliseconds (`-1` if persistent).                      |
-| `EXPIRE`  | `<key> <ms>`        | Attaches or updates the expiration deadline.                                          |
-| `PERSIST` | `<key>`             | Removes the expiration deadline, keeping the key persistent.                          |
-| `BATCH`   | `(cmd1, cmd2, ...)` | Executes an atomic sequence targeting keys with identical prefixes.                   |
-| `STATS`   | None                | Retrieves cache hit/miss, memory, connection, and eviction telemetry counters.        |
-| `RESET`   | None                | Wipes all partition shards and resets accounting counters.                            |
+| Command   | Arguments           | Semantics                                                                                                               |
+|-----------|---------------------|-------------------------------------------------------------------------------------------------------------------------|
+| `PING`    | None                | Liveness check. Returns `StatusCode::Ok`.                                                                               |
+| `GET`     | `<key>`             | Fetches cached binary payload and updates the LRU recency clock.                                                        |
+| `SET`     | `<key> <val>`       | Unconditional storage upsert.                                                                                           |
+| `ADD`     | `<key> <val>`       | Inserts payload only if the key is missing or expired; otherwise returns `KeyExists`.                                   |
+| `REPLACE` | `<key> <val>`       | Updates payload only if the key is active; otherwise returns `KeyNotFound`.                                             |
+| `DEL`     | `<key>`             | Removes the key and immediately reclaims accounted payload memory.                                                      |
+| `EXISTS`  | `<key>`             | Checks key presence without altering the LRU access clock.                                                              |
+| `TTL`     | `<key>`             | Queries remaining lifespan in milliseconds (`-1` if persistent).                                                        |
+| `EXPIRE`  | `<key> <ms>`        | Attaches or updates the expiration deadline.                                                                            |
+| `PERSIST` | `<key>`             | Removes the expiration deadline, keeping the key persistent.                                                            |
+| `BATCH`   | `(cmd1, cmd2, ...)` | Executes an atomic sequence targeting keys with identical prefixes.                                                     |
+| `STATS`   | None                | Retrieves cache hit/miss, memory, connection, and eviction telemetry counters.                                          |
+| `RESET`   | None                | Atomically clears all shards and resets hit, miss, and eviction counters. Uptime and connection counters are preserved. |

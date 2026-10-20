@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "rust";
             const default_dark_theme = "coal";
-            window.path_to_searchindex_js = "searchindex-39d087ff.js";
+            window.path_to_searchindex_js = "searchindex-06b4413d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-76d82f47.js"></script>
@@ -321,6 +321,22 @@ AHashMap:          "user:2" =&gt; Entry {
 <li><strong>TaskTracker Barrier:</strong> The server closes its listener, allows in-flight operations to finish writing responses, and waits up to <code>shutdown_timeout_secs</code> before forcing process exit.</li>
 <li><strong>Buffer Compaction:</strong> Connections reclaim excess buffer capacity when processing large payloads expands internal buffers beyond 1 MB.</li>
 </ul>
+<h2 id="5-memory-accounting"><a class="header" href="#5-memory-accounting">5. Memory Accounting</a></h2>
+<p>Quty accounts for the byte lengths of keys and values. This is a payload-byte
+budget, not a strict process-memory ceiling. Hash-map buckets, dense-index
+storage, entry metadata, allocator overhead, and other process allocations
+are excluded.</p>
+<p>The configured budget is divided among shards. A shard may reach its budget
+even when other shards have unused capacity.</p>
+<h3 id="eviction-behavior"><a class="header" href="#eviction-behavior">Eviction Behavior</a></h3>
+<p>Before evicting entries to reclaim headroom, the eviction policy determines
+whether the selected candidates can free enough accounted bytes. If the
+capacity requirement cannot be satisfied, the operation fails without
+removing those candidates.</p>
+<h2 id="6-reset-semantics"><a class="header" href="#6-reset-semantics">6. RESET Semantics</a></h2>
+<p><code>RESET</code> acquires all shard write locks in ascending shard-index order, clears
+the shard contents, and resets hit, miss, and eviction counters. Uptime,
+total connections, and active-connection counts are preserved.</p>
 
                     </main>
 

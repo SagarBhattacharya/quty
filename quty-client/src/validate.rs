@@ -1,13 +1,13 @@
 //! Client-side input validation for protocol invariants and payload size bounds.
 
-use quty_proto::constants::{MAX_BATCH_OPERATIONS, MAX_KEY_SIZE, MAX_VALUE_SIZE};
 use quty_proto::Operation;
+use quty_proto::constants::{MAX_BATCH_OPERATIONS, MAX_KEY_SIZE, MAX_VALUE_SIZE};
 use std::io;
 
 /// Validates that a key meets length and non-empty constraints.
-/// 
+///
 /// # Errors
-/// 
+///
 /// Returns [`io::ErrorKind::InvalidInput`] if key is empty
 /// or is greater than [`MAX_KEY_SIZE`]
 pub fn validate_key(key: &str) -> io::Result<()> {

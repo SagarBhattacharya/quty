@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "rust";
             const default_dark_theme = "coal";
-            window.path_to_searchindex_js = "searchindex-39d087ff.js";
+            window.path_to_searchindex_js = "searchindex-06b4413d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-76d82f47.js"></script>
@@ -217,16 +217,19 @@
 <h2 id="architectural-principles"><a class="header" href="#architectural-principles">Architectural Principles</a></h2>
 <ol>
 <li>
-<p><strong>Zero Global Mutexes:</strong> Key-space partitioning across (N) shards distributes work across CPU cores while isolating synchronization to individual shards.</p>
+<p><strong>Shard-Scoped Synchronization:</strong> Most operations synchronize on the shard
+they access. Operations such as <code>RESET</code> acquire all shard locks in a
+consistent order.</p>
 </li>
 <li>
-<p><strong>Deterministic Payload Accounting:</strong> Shard memory tracking accounts for key and value slice byte lengths, keeping accounted memory usage within defined operational boundaries.</p>
+<p><strong>Payload-Byte Budgeting:</strong> Memory accounting tracks key and value byte
+lengths. It excludes hash-table/index capacity, entry metadata, allocator
+overhead, and other process allocations; it is not a strict RSS ceiling.
+The budget is divided among shards.</p>
 </li>
 <li>
-<p><strong>No Phantom Eviction in Transactions:</strong> Transactions cannot trigger inline LRU eviction. If a transaction exceeds available memory capacity, it aborts and restores the prior state rather than silently dropping existing keys.</p>
-</li>
-<li>
-<p><strong>Panic Isolation:</strong> Worker panics unwind through RAII transaction guards, applying inverse mutations in last-in, first-out (LIFO) order to restore the shard’s prior state.</p>
+<p><strong>Transactional Safety:</strong> Single-shard batches use inverse mutations to
+restore prior state when a transaction fails.</p>
 </li>
 </ol>
 

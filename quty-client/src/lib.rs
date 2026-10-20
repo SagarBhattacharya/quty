@@ -7,6 +7,7 @@ pub mod format;
 pub mod repl;
 pub mod validate;
 
+use crate::validate::{validate_batch, validate_operation};
 use bytes::{Bytes, BytesMut};
 use quty_proto::{Command, Operation, Request, Response};
 use std::io;
@@ -15,7 +16,6 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio::time::timeout;
-use crate::validate::{validate_batch, validate_operation};
 
 /// Default timeout applied to read operations to detect hung or half-open TCP connections.
 pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(5);

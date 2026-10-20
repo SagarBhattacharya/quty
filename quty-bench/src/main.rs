@@ -8,6 +8,7 @@ use clap::Parser;
 use colored::Colorize;
 use hdrhistogram::Histogram;
 use metrics::BenchmarkStats;
+use quty_proto::MAX_VALUE_SIZE;
 use runner::run_worker;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,9 +60,43 @@ struct Args {
 	zipf: bool,
 }
 
+impl Args {
+	/// Validates CLI arguments against operational limits before spawning tasks.
+	fn validate(&self) -> Result<(), String> {
+		if self.concurrency == 0 {
+			return Err("Concurrency (--concurrency / -c) must be at least 1".into());
+		}
+		if self.pipeline == 0 {
+			return Err("Pipeline depth (--pipeline / -p) must be at least 1".into());
+		}
+		if self.duration_secs == 0 {
+			return Err("Benchmark duration (--duration / -d) must be at least 1 second".into());
+		}
+		if self.key_count == 0 {
+			return Err("Key count (--keys / -k) must be at least 1".into());
+		}
+		if self.val_size > MAX_VALUE_SIZE {
+			return Err(format!(
+				"Value size (--val-size: {} B) exceeds protocol limit of {MAX_VALUE_SIZE} B (32 MB)",
+				self.val_size
+			));
+		}
+		Ok(())
+	}
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args = Args::parse();
+
+	// Fail fast on invalid CLI arguments before establishing sockets or spinning tasks
+	if let Err(validation_err) = args.validate() {
+		eprintln!(
+			"{} {validation_err}",
+			"(error) INVALID CONFIG:".bold().red()
+		);
+		std::process::exit(1);
+	}
 
 	println!(
 		"{}",
@@ -114,7 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		handles.push(handle);
 	}
 
-	// 2. Pre-warm phase (Populates initial data and warms memory caches)
+	// 2. Pre-warm phase
 	println!(
 		"Warming up server and caches ({} seconds)...",
 		args.warmup_secs
@@ -135,9 +170,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	stop_flag.store(true, Ordering::Relaxed);
 	let actual_duration = run_start.elapsed();
 
-	// 5. Consolidate HDR histograms
+	// 5. Consolidate HDR histograms with strict worker error propagation
 	println!("Aggregating latency histograms across workers...");
 	let mut merged_histogram = Histogram::<u64>::new_with_bounds(1, 60_000_000, 3)?;
+	let mut failed_workers = 0;
 
 	for handle in handles {
 		match handle.await? {
@@ -145,12 +181,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 				merged_histogram.add(&worker_hist)?;
 			}
 			Err(e) => {
-				eprintln!("Worker error: {e}");
+				eprintln!("{} {e}", "(error) Worker failure:".bold().red());
+				failed_workers += 1;
 			}
 		}
 	}
 
-	// 6. Output formatted summary table
+	// If any worker connection was broken or dropped, abort and fail the run
+	if failed_workers > 0 {
+		eprintln!(
+			"\n{} Benchmark aborted: {failed_workers}/{} worker connection(s) failed.",
+			"(error) BENCHMARK FAILED:".bold().red(),
+			args.concurrency
+		);
+		std::process::exit(1);
+	}
+
+	// 6. Output formatted summary table only on 100% completion
 	let stats = BenchmarkStats::new(merged_histogram, actual_duration);
 	let title = format!(
 		"{:?} (P={}, C={}, Zipf={})",
@@ -159,4 +206,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	stats.print_summary(&title);
 
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn sample_args() -> Args {
+		Args {
+			addr: "127.0.0.1:6379".into(),
+			concurrency: 10,
+			pipeline: 16,
+			duration_secs: 5,
+			warmup_secs: 1,
+			workload: WorkloadType::Mixed,
+			key_count: 1000,
+			val_size: 64,
+			zipf: false,
+		}
+	}
+
+	#[test]
+	fn test_cli_validation_rejects_zero_values() {
+		let mut args = sample_args();
+
+		args.concurrency = 0;
+		assert!(args.validate().is_err());
+
+		args = sample_args();
+		args.pipeline = 0;
+		assert!(args.validate().is_err());
+
+		args = sample_args();
+		args.duration_secs = 0;
+		assert!(args.validate().is_err());
+
+		args = sample_args();
+		args.key_count = 0;
+		assert!(args.validate().is_err());
+	}
+
+	#[test]
+	fn test_cli_validation_rejects_oversized_payload() {
+		let mut args = sample_args();
+		args.val_size = 33 * 1024 * 1024; // 33 MB > 32 MB
+		let err = args
+			.validate()
+			.expect_err("Should reject oversized payload");
+		assert!(err.contains("exceeds protocol limit"));
+	}
+
+	#[test]
+	fn test_cli_validation_accepts_valid_params() {
+		let args = sample_args();
+		assert!(args.validate().is_ok());
+	}
 }

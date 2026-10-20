@@ -12,7 +12,10 @@ use ahash::RandomState;
 use exec::{execute_mutation, execute_read};
 use lru::LruPolicy;
 use parking_lot::RwLock;
-use quty_proto::{BatchErrorPayload, Command, Operation, ResponsePayload, StatsPayload, StatusCode, SubResult, MAX_BATCH_OPERATIONS};
+use quty_proto::{
+	BatchErrorPayload, Command, MAX_BATCH_OPERATIONS, Operation, ResponsePayload, StatsPayload,
+	StatusCode, SubResult,
+};
 use shard::Shard;
 use stats::EngineStats;
 use std::sync::Arc;
@@ -134,8 +137,7 @@ impl Engine {
 			if matches!(op, Operation::Get { .. }) {
 				if status == StatusCode::Ok {
 					batch_hits += 1;
-				} else if status == StatusCode::KeyNotFound
-					|| status == StatusCode::KeyExpired {
+				} else if status == StatusCode::KeyNotFound || status == StatusCode::KeyExpired {
 					batch_misses += 1;
 				}
 			}
@@ -189,8 +191,7 @@ impl Engine {
 	/// Locks are acquired strictly in increasing index order (`0..self.shards.len()`).
 	/// Since all other operations touch at most one shard at a time, lock acquisition cannot cycle.
 	pub fn reset_all(&self) {
-		let mut write_guards: Vec<_> = self.shards.iter()
-			.map(|shard| shard.write()).collect();
+		let mut write_guards: Vec<_> = self.shards.iter().map(|shard| shard.write()).collect();
 		for shard in &mut write_guards {
 			shard.clear();
 		}
@@ -288,11 +289,12 @@ impl Engine {
 }
 
 #[cfg(test)]
+#[allow(clippy::similar_names)]
 mod tests {
 	use super::Engine;
 	use crate::config::EngineConfig;
 	use bytes::Bytes;
-	use quty_proto::{routing_key, Command, Operation, ResponsePayload, StatusCode};
+	use quty_proto::{Command, Operation, ResponsePayload, StatusCode};
 
 	#[test]
 	fn test_batch_cross_shard_routing_guard() {
@@ -441,16 +443,26 @@ mod tests {
 
 		// Execute batch: 1 Hit (test:k1), 1 Miss (test:missing)
 		let batch_cmd = Command::Batch(vec![
-			Operation::Get { key: "test:k1".to_string() },
-			Operation::Get { key: "test:missing".to_string() },
+			Operation::Get {
+				key: "test:k1".to_string(),
+			},
+			Operation::Get {
+				key: "test:missing".to_string(),
+			},
 		]);
 
 		let (status, _) = engine.execute(batch_cmd);
 		assert_eq!(status, StatusCode::Ok);
 
 		let stats_after = engine.collect_stats();
-		assert_eq!(stats_after.get_hits, 1, "Batch GET should record a cache hit");
-		assert_eq!(stats_after.get_misses, 1, "Batch GET should record a cache miss");
+		assert_eq!(
+			stats_after.get_hits, 1,
+			"Batch GET should record a cache hit"
+		);
+		assert_eq!(
+			stats_after.get_misses, 1,
+			"Batch GET should record a cache miss"
+		);
 	}
 
 	#[test]
@@ -490,8 +502,14 @@ mod tests {
 		assert_eq!(stats_after.total_keys, 0);
 		assert_eq!(stats_after.used_memory_bytes, 0);
 		assert_eq!(stats_after.get_hits, 0, "Hits must be zeroed after RESET");
-		assert_eq!(stats_after.get_misses, 0, "Misses must be zeroed after RESET");
-		assert_eq!(stats_after.evictions, 0, "Evictions must be zeroed after RESET");
+		assert_eq!(
+			stats_after.get_misses, 0,
+			"Misses must be zeroed after RESET"
+		);
+		assert_eq!(
+			stats_after.evictions, 0,
+			"Evictions must be zeroed after RESET"
+		);
 
 		for i in 0..64 {
 			let (get_status, _) = engine.execute(Command::Single(Operation::Get {
@@ -546,30 +564,44 @@ mod tests {
 			num_shards: 2,
 			max_memory_bytes: 200,
 			initial_shard_capacity: 16,
-			eviction_burst_limit: 0, // Disable eviction to test pure capacity walls
+			eviction_burst_limit: 0,
 		});
 
-		let prefix_1 = "s1";
-		let prefix_2 = "s2";
-		assert_ne!(engine.shard_index(prefix_1), engine.shard_index(prefix_2));
+		// Dynamically discover two prefixes that map to shard 0 and shard 1 respectively
+		let mut prefix_shard_0 = None;
+		let mut prefix_shard_1 = None;
 
-		let _ = engine.execute(Command::Single(Operation::Set {
-			key: format!("{prefix_1}:1"),
-			value: Bytes::from(vec![0xAA; 80]),
-		}));
+		for i in 0..100 {
+			let candidate = format!("p{i}");
+			match engine.shard_index(&candidate) {
+				0 if prefix_shard_0.is_none() => prefix_shard_0 = Some(candidate),
+				1 if prefix_shard_1.is_none() => prefix_shard_1 = Some(candidate),
+				_ => {}
+			}
+			if prefix_shard_0.is_some() && prefix_shard_1.is_some() {
+				break;
+			}
+		}
 
-		// Second write to Shard 1 demanding 30B (83 + 33 = 116 > 100) -> Fails with StorageFull
+		let prefix_1 = prefix_shard_0.expect("Failed to find prefix for shard 0");
+		let prefix_2 = prefix_shard_1.expect("Failed to find prefix for shard 1");
+
+		assert_ne!(engine.shard_index(&prefix_1), engine.shard_index(&prefix_2));
+
+		// 1. Shard 1: Oversized write (> 100B) must fail with StorageFull
+		// Key: "pX:huge" (~7B) + Value (105B) = 112B > 100B
 		let (fail_status, _) = engine.execute(Command::Single(Operation::Set {
-			key: format!("{prefix_1}:2"),
-			value: Bytes::from(vec![0xAA; 30]),
+			key: format!("{prefix_1}:huge"),
+			value: Bytes::from(vec![0xAA; 105]),
 		}));
 		assert_eq!(
 			fail_status,
 			StatusCode::StorageFull,
-			"Shard 1 must reject write when its individual budget is exceeded"
+			"Shard 1 must reject a write exceeding its individual capacity"
 		);
 
-		// 2. Shard 2 is untouched and must accept writes even though Shard 1 is full
+		// 2. Shard 2: Untouched and accepts writes within its 100B allocation
+		// Key: "pY:1" (~4B) + Value (80B) = 84B <= 100B
 		let (ok_status, _) = engine.execute(Command::Single(Operation::Set {
 			key: format!("{prefix_2}:1"),
 			value: Bytes::from(vec![0xBB; 80]),

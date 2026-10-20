@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "rust";
             const default_dark_theme = "coal";
-            window.path_to_searchindex_js = "searchindex-39d087ff.js";
+            window.path_to_searchindex_js = "searchindex-06b4413d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-76d82f47.js"></script>
@@ -188,7 +188,19 @@
 <li><strong>Byte Ordering:</strong> All multi-byte numerical fields (16-bit, 32-bit, and 64-bit) MUST be encoded in Big-Endian (Network Byte Order).</li>
 <li><strong>Framing Invariant:</strong> Every network message begins with a fixed 20-byte header. The header explicitly declares the payload byte length (<code>payload_len</code>), allowing decoders to determine frame boundaries before consuming variable-length payload bytes.</li>
 </ul>
-<h2 id="2-request-framing"><a class="header" href="#2-request-framing">2. Request Framing</a></h2>
+<h2 id="2-frame-and-payload-limits"><a class="header" href="#2-frame-and-payload-limits">2. Frame and Payload Limits</a></h2>
+<ul>
+<li>Every request and response begins with a 20-byte header.</li>
+<li>A frame payload must not exceed 64 MiB.</li>
+<li>A batch request or response array must contain no more than 64 operations
+or results.</li>
+<li>Decoders validate complete headers before waiting for payload bodies.</li>
+<li>Request flags must be zero.</li>
+<li>Fixed-width response payloads must have their exact defined lengths.</li>
+<li>Invalid lengths, malformed payloads, and unexpected trailing bytes are
+rejected.</li>
+</ul>
+<h2 id="3-request-framing"><a class="header" href="#3-request-framing">3. Request Framing</a></h2>
 <h3 id="header-layout-20-bytes"><a class="header" href="#header-layout-20-bytes">Header Layout (20 Bytes)</a></h3>
 <div class="table-wrapper">
 <table>
@@ -220,7 +232,7 @@
 </tbody>
 </table>
 </div>
-<h2 id="3-storage-operation-encoding"><a class="header" href="#3-storage-operation-encoding">3. Storage Operation Encoding</a></h2>
+<h2 id="4-storage-operation-encoding"><a class="header" href="#4-storage-operation-encoding">4. Storage Operation Encoding</a></h2>
 <p>When <code>command_type</code> is <code>Single</code> (<code>0x01</code>) or operations are included inside a <code>Batch</code> (<code>0x02</code>), each storage operation MUST use the following payload encoding.</p>
 <h3 id="operation-opcodes"><a class="header" href="#operation-opcodes">Operation Opcodes</a></h3>
 <div class="table-wrapper">
@@ -257,7 +269,7 @@
 [Encoded Operation N-1]
 </code></pre>
 <p>The item count specifies the number of encoded operations in the batch.</p>
-<h2 id="4-response-framing"><a class="header" href="#4-response-framing">4. Response Framing</a></h2>
+<h2 id="5-response-framing"><a class="header" href="#5-response-framing">5. Response Framing</a></h2>
 <h3 id="header-layout-20-bytes-1"><a class="header" href="#header-layout-20-bytes-1">Header Layout (20 Bytes)</a></h3>
 <div class="table-wrapper">
 <table>
@@ -313,17 +325,17 @@
 [Failure Status Code: 1B]
 </code></pre>
 <p>The failed index is zero-based and identifies the operation that triggered the failure.</p>
-<h2 id="5-shard-partitioning--transaction-invariants"><a class="header" href="#5-shard-partitioning--transaction-invariants">5. Shard Partitioning &amp; Transaction Invariants</a></h2>
-<h3 id="51-prefix-routing"><a class="header" href="#51-prefix-routing">5.1 Prefix Routing</a></h3>
+<h2 id="6-shard-partitioning--transaction-invariants"><a class="header" href="#6-shard-partitioning--transaction-invariants">6. Shard Partitioning &amp; Transaction Invariants</a></h2>
+<h3 id="61-prefix-routing"><a class="header" href="#61-prefix-routing">6.1 Prefix Routing</a></h3>
 <p>All keys are routed to a shard using the string prefix preceding the first colon (<code>:</code>).</p>
 <ul>
 <li><code>session:user_123</code> and <code>session:user_456</code> map to the same partition.</li>
 <li>If no colon exists (e.g., <code>counter</code>), the entire key string is hashed.</li>
 </ul>
-<h3 id="52-batch-single-shard-constraint"><a class="header" href="#52-batch-single-shard-constraint">5.2 Batch Single-Shard Constraint</a></h3>
+<h3 id="62-batch-single-shard-constraint"><a class="header" href="#62-batch-single-shard-constraint">6.2 Batch Single-Shard Constraint</a></h3>
 <p>Atomic batches (<code>0x02</code>) MUST NOT cross shard boundaries.</p>
 <p>If a batch contains keys that resolve to different shards, the server MUST abort before executing any mutations and return status code <code>0x32</code> (<code>CrossShardViolation</code>).</p>
-<h3 id="53-rollback-semantics"><a class="header" href="#53-rollback-semantics">5.3 Rollback Semantics</a></h3>
+<h3 id="63-rollback-semantics"><a class="header" href="#63-rollback-semantics">6.3 Rollback Semantics</a></h3>
 <p>If any operation in a batch produces a hard error, such as <code>StorageFull</code> or <code>KeyExists</code>, all previous mutations in that batch MUST be rolled back immediately.</p>
 <p>The server MUST return status code <code>0x34</code> (<code>BatchShortCircuited</code>) with a <code>BatchErr</code> payload identifying the failed operation and its failure status code.</p>
 

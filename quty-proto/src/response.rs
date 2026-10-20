@@ -5,7 +5,7 @@
 //! by a variable-length [`ResponsePayload`].
 
 use crate::constants::{PROTOCOL_MAGIC, PROTOCOL_VERSION_V1, RESPONSE_HEADER_SIZE};
-use crate::to_u32_len;
+use crate::{MAX_PAYLOAD_SIZE, to_u32_len};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use thiserror::Error;
 
@@ -479,6 +479,12 @@ impl ResponseHeader {
 
 		let request_id = src.get_u64();
 		let payload_len = src.get_u32();
+		if payload_len as usize >= MAX_PAYLOAD_SIZE {
+			return Err(ResponseDecodeError::PayloadTooLarge(
+				payload_len as usize,
+				MAX_PAYLOAD_SIZE,
+			));
+		}
 
 		Ok(Self {
 			magic,
@@ -541,6 +547,13 @@ impl Response {
 		}
 
 		let payload_len = u32::from_be_bytes([src[16], src[17], src[18], src[19]]) as usize;
+		if payload_len > MAX_PAYLOAD_SIZE {
+			return Err(ResponseDecodeError::PayloadTooLarge(
+				payload_len,
+				MAX_PAYLOAD_SIZE,
+			));
+		}
+
 		let total_frame_len = RESPONSE_HEADER_SIZE + payload_len;
 
 		if src.len() < total_frame_len {
@@ -579,4 +592,13 @@ pub enum ResponseDecodeError {
 	/// String payload failed valid UTF-8 conversion.
 	#[error("String payload contained invalid UTF-8 bytes")]
 	InvalidUtf8,
+	/// Payload exceeded [`MAX_PAYLOAD_SIZE`]
+	#[error("Payload size ({0} B) exceeds maximum limit ({1} B)")]
+	PayloadTooLarge(usize, usize),
+	/// Unexpected Payload (returned by PING/STATS/RESET if any payload present)
+	#[error("Unexpected payload present for zero-argument command")]
+	UnexpectedPayload,
+	/// Reported payload length does not match consumed payload
+	#[error("Payload length mismatch: unparsed trailing bytes remaining")]
+	TrailingBytes,
 }

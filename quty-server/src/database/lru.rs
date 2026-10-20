@@ -106,7 +106,7 @@ impl LruPolicy {
 		if self.eviction_burst_limit == 0 {
 			return Err(CapacityExceeded);
 		}
-		
+
 		let max_payload = shard.max_memory_bytes();
 		if required_bytes > max_payload {
 			return Err(CapacityExceeded);
@@ -313,13 +313,19 @@ mod tests {
 
 		for i in 0..5 {
 			let k = format!("k:{i}");
-			shard.insert(&k, Bytes::from_static(b"1234567"), None, 0).unwrap(); // 3 + 7 = 10B
+			shard
+				.insert(&k, Bytes::from_static(b"1234567"), None, 0)
+				.unwrap(); // 3 + 7 = 10B
 		}
 		assert_eq!(shard.len(), 5);
 		assert_eq!(shard.used_memory_bytes(), 50);
 
 		let res = lru.evict_headroom(&mut shard, 110, 0);
 		assert_eq!(res, Err(CapacityExceeded));
-		assert_eq!(shard.len(), 5, "No keys should be evicted on impossible write");
+		assert_eq!(
+			shard.len(),
+			5,
+			"No keys should be evicted on impossible write"
+		);
 	}
 }

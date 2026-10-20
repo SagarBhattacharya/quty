@@ -5,13 +5,13 @@
 
 use crate::Client;
 use crate::format::render_response;
+use crate::validate::{validate_key, validate_value};
 use bytes::Bytes;
 use colored::Colorize;
 use quty_proto::{Command, Operation};
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use std::path::PathBuf;
-use crate::validate::{validate_key, validate_value};
 
 /// Starts the interactive terminal Read-Eval-Print-Loop (REPL).
 ///

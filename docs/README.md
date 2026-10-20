@@ -4,8 +4,14 @@
 
 ## Core Capabilities
 
-* **Partitioned Key-Space:** Automatic power-of-two sharding (`ahash`) with independent `parking_lot::RwLock` instances to eliminate global lock contention across worker threads.
-* **Deterministic Memory Budgeting:** Explicit memory accounting tracking key and value byte lengths, backed by inline headroom reclamation and background maintenance sweeps.
-* **Stateless Sampled LRU:** Memory-efficient candidate selection via an indexed dense key vector maintaining $O(1)$ amortized `swap_remove` operations with zero bucket iteration stalls.
-* **Atomic Batch Transactions:** Single-shard atomic sequences (`BATCH (cmd1, cmd2, ...)`) with RAII-managed undo stacks. If an operation fails a precondition or causes a capacity breach, state is safely rolled back in LIFO order.
-* **Binary Wire Protocol:** Compact 20-byte fixed frame header supporting pipelined streaming I/O and zero-allocation frame decoding.
+- **Partitioned Key-Space:** Power-of-two sharding with independent
+	`parking_lot::RwLock` instances reduces contention by isolating most
+	operations to individual shards.
+- **Payload-Byte Budgeting:** Accounts for key and value bytes, excluding
+	data-structure and allocator overhead. The budget is not a process-RSS limit.
+- **Sampled LRU Eviction:** Uses a dense key index for candidate sampling
+	without scanning the entire hash map.
+- **Atomic Batch Transactions:** Single-shard batches use an undo log to
+	restore prior state when an operation fails.
+- **Binary Wire Protocol:** A fixed 20-byte header supports incremental
+	decoding and bounded request and response payloads.

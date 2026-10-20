@@ -80,18 +80,17 @@ pub async fn run_worker(
 					let now = Instant::now();
 					if let Some(tracked) = in_flight.pop_front() {
 						if tracked.request_id != res.header.request_id {
-							return Err(format!(
-								"Worker {worker_id}: Request ID mismatch! Expected {}, got {}",
-								tracked.request_id, res.header.request_id
-							)
-								.into());
+							return Err(
+								format!(
+									"Worker {worker_id}: Request ID mismatch! Expected {}, got {}",
+									tracked.request_id, res.header.request_id
+								)
+								.into(),
+							);
 						}
 
 						#[allow(clippy::cast_possible_truncation)]
-						let latency_us = now
-							.duration_since(tracked.sent_at)
-							.as_micros()
-							.max(1) as u64;
+						let latency_us = now.duration_since(tracked.sent_at).as_micros().max(1) as u64;
 
 						let _ = histogram.record(latency_us);
 					}

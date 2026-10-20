@@ -1,10 +1,13 @@
 use bytes::Bytes;
 use quty_client::format::{format_duration, format_sub_result};
 use quty_client::repl::parse_repl_input;
-use quty_proto::constants::{MAX_KEY_SIZE, MAX_VALUE_SIZE};
-use quty_proto::{BatchErrorPayload, Command, Operation, ResponsePayload, StatusCode, SubResult, MAX_BATCH_OPERATIONS};
-use std::time::Duration;
 use quty_client::validate::{validate_batch, validate_key};
+use quty_proto::constants::{MAX_KEY_SIZE, MAX_VALUE_SIZE};
+use quty_proto::{
+	BatchErrorPayload, Command, MAX_BATCH_OPERATIONS, Operation, ResponsePayload, StatusCode,
+	SubResult,
+};
+use std::time::Duration;
 
 #[test]
 fn test_parse_single_operations() {
@@ -185,16 +188,10 @@ fn test_validate_batch_limits() {
 	assert!(validate_batch(&[]).is_err());
 
 	// Max batch size passes
-	let valid_ops = vec![
-		Operation::Get { key: "k:1".into() };
-		MAX_BATCH_OPERATIONS
-	];
+	let valid_ops = vec![Operation::Get { key: "k:1".into() }; MAX_BATCH_OPERATIONS];
 	assert!(validate_batch(&valid_ops).is_ok());
 
 	// Over limit fails
-	let oversized_ops = vec![
-		Operation::Get { key: "k:1".into() };
-		MAX_BATCH_OPERATIONS + 1
-	];
+	let oversized_ops = vec![Operation::Get { key: "k:1".into() }; MAX_BATCH_OPERATIONS + 1];
 	assert!(validate_batch(&oversized_ops).is_err());
 }

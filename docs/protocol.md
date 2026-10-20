@@ -8,7 +8,19 @@ This document defines the wire specification for the Quty protocol (v1). Any com
 - **Byte Ordering:** All multi-byte numerical fields (16-bit, 32-bit, and 64-bit) MUST be encoded in Big-Endian (Network Byte Order).
 - **Framing Invariant:** Every network message begins with a fixed 20-byte header. The header explicitly declares the payload byte length (`payload_len`), allowing decoders to determine frame boundaries before consuming variable-length payload bytes.
 
-## 2. Request Framing
+## 2. Frame and Payload Limits
+
+- Every request and response begins with a 20-byte header.
+- A frame payload must not exceed 64 MiB.
+- A batch request or response array must contain no more than 64 operations
+	or results.
+- Decoders validate complete headers before waiting for payload bodies.
+- Request flags must be zero.
+- Fixed-width response payloads must have their exact defined lengths.
+- Invalid lengths, malformed payloads, and unexpected trailing bytes are
+	rejected.
+
+## 3. Request Framing
 
 ### Header Layout (20 Bytes)
 
@@ -31,7 +43,7 @@ This document defines the wire specification for the Quty protocol (v1). Any com
 | `0x04` | `Stats`  | Telemetry inspection. `payload_len` MUST be `0`.                         |
 | `0x05` | `Reset`  | Engine flush and metric reset. `payload_len` MUST be `0`.                |
 
-## 3. Storage Operation Encoding
+## 4. Storage Operation Encoding
 
 When `command_type` is `Single` (`0x01`) or operations are included inside a `Batch` (`0x02`), each storage operation MUST use the following payload encoding.
 
@@ -70,7 +82,7 @@ A batch payload consists of a 4-byte operation count followed by the encoded ope
 
 The item count specifies the number of encoded operations in the batch.
 
-## 4. Response Framing
+## 5. Response Framing
 
 ### Header Layout (20 Bytes)
 
@@ -130,22 +142,22 @@ The `BatchErr` payload contains information about the operation that caused a ba
 
 The failed index is zero-based and identifies the operation that triggered the failure.
 
-## 5. Shard Partitioning & Transaction Invariants
+## 6. Shard Partitioning & Transaction Invariants
 
-### 5.1 Prefix Routing
+### 6.1 Prefix Routing
 
 All keys are routed to a shard using the string prefix preceding the first colon (`:`).
 
 - `session:user_123` and `session:user_456` map to the same partition.
 - If no colon exists (e.g., `counter`), the entire key string is hashed.
 
-### 5.2 Batch Single-Shard Constraint
+### 6.2 Batch Single-Shard Constraint
 
 Atomic batches (`0x02`) MUST NOT cross shard boundaries.
 
 If a batch contains keys that resolve to different shards, the server MUST abort before executing any mutations and return status code `0x32` (`CrossShardViolation`).
 
-### 5.3 Rollback Semantics
+### 6.3 Rollback Semantics
 
 If any operation in a batch produces a hard error, such as `StorageFull` or `KeyExists`, all previous mutations in that batch MUST be rolled back immediately.
 
