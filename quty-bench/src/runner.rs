@@ -1,14 +1,21 @@
-//! High-throughput asynchronous TCP connection worker with latency tracking.
+//! High-throughput asynchronous TCP connection worker with true per-request latency tracking.
 
 use crate::workload::{KeyGenerator, WorkloadType};
 use bytes::BytesMut;
 use hdrhistogram::Histogram;
 use quty_proto::{Request, Response};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+
+/// Tracks in-flight request timestamps for individual latency calculation.
+struct InFlight {
+	request_id: u64,
+	sent_at: Instant,
+}
 
 /// Runs an isolated benchmarking connection worker.
 #[allow(clippy::too_many_arguments)]
@@ -33,6 +40,7 @@ pub async fn run_worker(
 
 	let mut histogram = Histogram::<u64>::new_with_bounds(1, 60_000_000, 3)?;
 	let mut req_counter = 1u64;
+	let mut in_flight = VecDeque::with_capacity(pipeline_depth * 2);
 
 	// Await coordinated release of all connections
 	while !warmup_flag.load(Ordering::Relaxed) {
@@ -41,20 +49,54 @@ pub async fn run_worker(
 
 	while !stop_flag.load(Ordering::Relaxed) {
 		write_buf.clear();
+		let should_record = record_flag.load(Ordering::Relaxed);
+
+		// 1. Dispatch pipeline batch with per-request timestamps
 		for _ in 0..pipeline_depth {
 			let cmd = key_gen.next_command(workload);
-			let req = Request::new(req_counter, cmd);
+			let req_id = req_counter;
 			req_counter = req_counter.wrapping_add(1);
+
+			let req = Request::new(req_id, cmd);
 			req.encode(&mut write_buf);
+
+			if should_record {
+				in_flight.push_back(InFlight {
+					request_id: req_id,
+					sent_at: Instant::now(),
+				});
+			}
 		}
 
-		let start_time = Instant::now();
 		stream.write_all(&write_buf).await?;
 
+		// 2. Decode responses individually and record true per-request latency
 		let mut responses_received = 0;
 		while responses_received < pipeline_depth {
-			while let Some(_res) = Response::decode(&mut read_buf)? {
+			while let Some(res) = Response::decode(&mut read_buf)? {
 				responses_received += 1;
+
+				if should_record {
+					let now = Instant::now();
+					if let Some(tracked) = in_flight.pop_front() {
+						if tracked.request_id != res.header.request_id {
+							return Err(format!(
+								"Worker {worker_id}: Request ID mismatch! Expected {}, got {}",
+								tracked.request_id, res.header.request_id
+							)
+								.into());
+						}
+
+						#[allow(clippy::cast_possible_truncation)]
+						let latency_us = now
+							.duration_since(tracked.sent_at)
+							.as_micros()
+							.max(1) as u64;
+
+						let _ = histogram.record(latency_us);
+					}
+				}
+
 				if responses_received == pipeline_depth {
 					break;
 				}
@@ -65,16 +107,6 @@ pub async fn run_worker(
 				if n == 0 {
 					return Err("Server closed connection during benchmark".into());
 				}
-			}
-		}
-
-		// Only record execution latencies after the warmup window has concluded
-		if record_flag.load(Ordering::Relaxed) {
-			#[allow(clippy::cast_possible_truncation)]
-			let elapsed_us = start_time.elapsed().as_micros() as u64;
-			let per_op_us = (elapsed_us / pipeline_depth as u64).max(1);
-			for _ in 0..pipeline_depth {
-				let _ = histogram.record(per_op_us);
 			}
 		}
 	}
