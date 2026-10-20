@@ -18,5 +18,5 @@ pub const MAX_KEY_SIZE: usize = 64 * 1024;
 /// Maximum allowable value size enforced at runtime (32 MB).
 pub const MAX_VALUE_SIZE: usize = 32 * 1024 * 1024;
 
-/// Maximum number of sub-operations allowable in a single batch (65,536).
-pub const MAX_BATCH_OPERATIONS: usize = 65_536;
+/// Maximum number of sub-operations allowable in a single batch (64).
+pub const MAX_BATCH_OPERATIONS: usize = 64;

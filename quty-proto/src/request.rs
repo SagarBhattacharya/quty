@@ -216,3 +216,44 @@ pub enum RequestDecodeError {
 	#[error("{0}")]
 	OpError(#[from] OperationDecodeError),
 }
+
+#[cfg(test)]
+mod batch_limit_tests {
+	use super::*;
+	use bytes::BytesMut;
+	use crate::constants::MAX_BATCH_OPERATIONS;
+
+	fn make_test_batch_bytes(count: usize) -> BytesMut {
+		let mut buf = BytesMut::new();
+		let mut ops = Vec::with_capacity(count);
+		for i in 0..count {
+			ops.push(Operation::Get { key: format!("s00:k:{i}") });
+		}
+		
+		let request = Request::new(
+			1, 
+			Command::Batch(ops)
+		);
+		request.encode(&mut buf);
+		buf
+	}
+
+	#[test]
+	fn test_batch_boundary_allowed() {
+		// Exactly at max limit: 64 operations
+		let mut valid_buf = make_test_batch_bytes(MAX_BATCH_OPERATIONS);
+		let decoded = Request::decode(&mut valid_buf);
+		assert!(decoded.is_ok(), "Batch of exactly MAX_BATCH_SIZE should decode successfully");
+	}
+
+	#[test]
+	fn test_batch_boundary_exceeded_rejected_early() {
+		// One over the limit: 65 operations
+		let mut oversized_buf = make_test_batch_bytes(MAX_BATCH_OPERATIONS + 1);
+		let decoded = Request::decode(&mut oversized_buf);
+		assert!(
+			decoded.is_err(),
+			"Batch of MAX_BATCH_SIZE + 1 must be rejected during protocol decoding"
+		);
+	}
+}

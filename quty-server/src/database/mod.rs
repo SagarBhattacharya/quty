@@ -12,17 +12,12 @@ use ahash::RandomState;
 use exec::{execute_mutation, execute_read};
 use lru::LruPolicy;
 use parking_lot::RwLock;
-use quty_proto::{
-	BatchErrorPayload, Command, Operation, ResponsePayload, StatsPayload, StatusCode, SubResult,
-};
+use quty_proto::{BatchErrorPayload, Command, Operation, ResponsePayload, StatsPayload, StatusCode, SubResult, MAX_BATCH_OPERATIONS};
 use shard::Shard;
 use stats::EngineStats;
 use std::sync::Arc;
 use std::time::Instant;
 use tx::{RollbackGuard, TxContext};
-
-/// Maximum operations permitted in a single atomic batch transaction.
-pub const MAX_BATCH_SIZE: usize = 64;
 
 /// High-concurrency sharded storage engine.
 pub struct Engine {
@@ -108,7 +103,7 @@ impl Engine {
 			return (StatusCode::EmptyBatch, ResponsePayload::Null);
 		}
 
-		if ops.len() > MAX_BATCH_SIZE {
+		if ops.len() > MAX_BATCH_OPERATIONS {
 			return (StatusCode::BadRequest, ResponsePayload::Null);
 		}
 
