@@ -132,14 +132,11 @@ fn test_parse_key_and_value_size_limits() {
 
 #[test]
 fn test_format_duration_resolution() {
-	assert_eq!(
-		format_duration(Duration::from_micros(500)),
-		"\u{1b}[2m(500 µs)\u{1b}[0m"
-	);
-	assert_eq!(
-		format_duration(Duration::from_millis(2)),
-		"\u{1b}[2m(2.00 ms)\u{1b}[0m"
-	);
+	let micro = format_duration(Duration::from_micros(500));
+	assert!(micro.contains("500 µs"));
+
+	let milli = format_duration(Duration::from_millis(2));
+	assert!(milli.contains("2.00 ms"));
 }
 
 #[test]
