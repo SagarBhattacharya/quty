@@ -17,6 +17,7 @@ features = [
 	"rt-multi-thread",
 	"macros",
 	"net",
-	"io-util"
+	"io-util",
+	"time"
 ]
 

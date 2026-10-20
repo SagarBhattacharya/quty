@@ -1,2 +1,7 @@
-/target
 /.idea
+/target
+**/*.rs.bk
+.quty_history
+*.swp
+*.log
+.DS_Store

@@ -1,5 +1,7 @@
+//! Command-line entry point and REPL launcher for `quty-client`.
+
 use clap::Parser;
-use colored::*;
+use colored::Colorize;
 use quty_client::Client;
 use quty_client::format::render_response;
 use quty_client::repl::{parse_repl_input, run_repl};
@@ -8,7 +10,7 @@ use std::process::exit;
 #[derive(Parser, Debug)]
 #[command(
 	name = "quty-cli",
-	author = "Quty Contributors",
+	author = "Sagar Bhattacharya",
 	version = "0.1.0",
 	about = "High-performance interactive terminal client for Quty cache server"
 )]
@@ -35,10 +37,9 @@ async fn main() {
 		Ok(c) => c,
 		Err(e) => {
 			eprintln!(
-				"{} Could not connect to Quty server at {}: {}",
+				"{} Could not connect to Quty server at {}: {e}",
 				"(error) CONNECTION REFUSED".bold().red(),
-				addr.bold(),
-				e
+				addr.bold()
 			);
 			exit(1);
 		}
@@ -51,7 +52,7 @@ async fn main() {
 		let command = match parse_repl_input(&raw_str) {
 			Ok(cmd) => cmd,
 			Err(err) => {
-				eprintln!("{} {}", "(error) SYNTAX".bold().red(), err);
+				eprintln!("{} {err}", "(error) SYNTAX".bold().red());
 				exit(1);
 			}
 		};
@@ -59,17 +60,13 @@ async fn main() {
 		match client.execute(command).await {
 			Ok(result) => {
 				render_response(&result.response, Some(result.elapsed));
-				if !matches!(
-					result.response.status,
-					quty_proto::StatusCode::Ok
-						| quty_proto::StatusCode::Created
-						| quty_proto::StatusCode::NoContent
-				) {
+				// Only fail process if response is a hard error (cache misses exit 0)
+				if result.response.header.status.is_hard_error() {
 					exit(1);
 				}
 			}
 			Err(err) => {
-				eprintln!("{} Network I/O failure: {}", "(error)".bold().red(), err);
+				eprintln!("{} Network I/O failure: {err}", "(error)".bold().red());
 				exit(1);
 			}
 		}

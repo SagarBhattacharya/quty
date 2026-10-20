@@ -1,0 +1,34 @@
+[package]
+name = "quty-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+quty-proto = { path = "../quty-proto" }
+bytes = "1.12.1"
+smallvec = "2.0.0-beta.3"
+ahash = "0.8.12"
+parking_lot = "0.12.5"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"]}
+tikv-jemallocator = "0.7.0"
+clap = { version = "4.6.7", features = ["derive"] }
+fastrand = "2.5.0"
+
+[dependencies.tokio-util]
+version = "0.7.20"
+features = ["rt"]
+
+[dependencies.tokio]
+version = "1.53.3"
+features = [
+	"net",
+	"signal",
+	"macros",
+	"rt-multi-thread",
+	"io-util",
+	"time",
+]
+
+[dev-dependencies]
+quty-client = { path = "../quty-client" }
