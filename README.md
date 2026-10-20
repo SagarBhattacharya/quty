@@ -20,26 +20,32 @@ A high-performance, sharded in-memory cache server written in Rust, featuring de
 - **Custom Binary Protocol:** Compact 20-byte frame header supporting pipelined, stream-oriented I/O.
 - **Jemalloc Integration:** Uses `tikv-jemallocator` as the memory allocator to help manage heap fragmentation under sustained write workloads.
 
-### Benchmark Summary
+## Benchmarks
 
-Measured locally on Fedora Linux 44 using an AMD Ryzen 5 5500U (6 cores / 12 threads), Rust 1.99.0, 64 shards, and loopback TCP. Each workload ran for approximately 10 seconds.
+Quty includes a benchmark harness for measuring throughput and latency across read, write, mixed, skewed, pipelined, and transactional workloads.
 
-| Workload                       | Pipeline Depth | Clients | Throughput (requests/s) |    p50 |    p99 |
-|--------------------------------|---------------:|--------:|------------------------:|-------:|-------:|
-| SET (100% writes)              |             16 |      50 |                   2.34M |  18 µs |  57 µs |
-| GET (100% reads)               |             16 |      50 |                   2.09M |  21 µs |  64 µs |
-| Mixed (80% reads / 20% writes) |             16 |      50 |                   2.03M |  21 µs |  65 µs |
-| Zipfian-skewed mixed workload  |             16 |      50 |                   1.91M |  22 µs |  71 µs |
-| Unpipelined                    |              1 |      50 |                  170.1K | 250 µs | 791 µs |
-| Deep pipelining                |             32 |      50 |                   2.81M |  15 µs |  51 µs |
-| Atomic batch commits           |              8 |      30 |        844.1K batches/s |  30 µs |  98 µs |
-| Atomic batch rollbacks         |              8 |      30 |        915.2K batches/s |  28 µs |  88 µs |
+### Observed Results
 
-The highest measured throughput was **2.81 million requests/s** with pipeline depth 32. The unpipelined workload reached approximately **170K requests/s**.
+Measured locally on Fedora Linux 44 using an AMD Ryzen 5 5500U (6 cores / 12 threads), Rust 1.99.0, 64 shards, and loopback TCP. Each workload used a 10-second measurement period following a 2-second warmup.
 
-These are local benchmark results, not universal performance guarantees. Results depend on workload, concurrency, pipeline depth, hardware, and configuration. Batch throughput counts batch requests, not individual operations within each batch.
+| Workload                       | Pipeline Depth | Clients |     Throughput |    p50 |    p99 |
+|--------------------------------|---------------:|--------:|---------------:|-------:|-------:|
+| SET (100% writes)              |             16 |      50 |    2.12M req/s |  19 µs |  81 µs |
+| GET (100% reads)               |             16 |      50 |    2.16M req/s |  20 µs |  59 µs |
+| Mixed (80% reads / 20% writes) |             16 |      50 |    2.15M req/s |  21 µs |  58 µs |
+| Zipfian-skewed mixed workload  |             16 |      50 |    2.08M req/s |  21 µs |  60 µs |
+| Unpipelined mixed workload     |              1 |      50 |     177K req/s | 245 µs | 724 µs |
+| Deep-pipelined mixed workload  |             32 |      50 |    3.05M req/s |  14 µs |  42 µs |
+| Atomic batch commits           |              8 |      30 | 864K batches/s |  29 µs |  96 µs |
+| Atomic batch rollbacks         |              8 |      30 | 646K batches/s |  35 µs | 196 µs |
 
-See [`benches.md`](docs/benches.md) for the full methodology, scenario results, analysis, and reproduction instructions.
+The highest measured throughput was approximately **3.05 million requests/s** with pipeline depth 32. In these runs, that was approximately **17.2× the throughput** of the unpipelined mixed workload.
+
+Latency is measured from pipeline dispatch to response receipt and decoding. Requests in the same pipeline share a start timestamp, so these figures include client dispatch, server processing, and response delivery rather than representing isolated server service time.
+
+These are single-run, local benchmark results, not universal performance guarantees. Results depend on hardware, workload, concurrency, and configuration. Batch throughput counts batch requests rather than individual operations inside each batch.
+
+See [`docs/benches.md`](docs/benches.md) for the full methodology, results, limitations, and reproduction instructions.
 
 ---
 
