@@ -5,6 +5,7 @@
 
 pub mod format;
 pub mod repl;
+pub mod validate;
 
 use bytes::{Bytes, BytesMut};
 use quty_proto::{Command, Operation, Request, Response};
@@ -14,6 +15,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, ToSocketAddrs};
 use tokio::time::timeout;
+use crate::validate::{validate_batch, validate_operation};
 
 /// Default timeout applied to read operations to detect hung or half-open TCP connections.
 pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(5);
@@ -104,6 +106,12 @@ impl Client {
 				"Client connection is poisoned from a prior \
 				transport or framing error; reconnect required",
 			));
+		}
+
+		match &command {
+			Command::Single(op) => validate_operation(op)?,
+			Command::Batch(ops) => validate_batch(ops)?,
+			Command::Ping | Command::Stats | Command::Reset => {}
 		}
 
 		match self.execute_internal(command).await {

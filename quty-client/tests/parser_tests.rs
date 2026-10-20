@@ -2,8 +2,9 @@ use bytes::Bytes;
 use quty_client::format::{format_duration, format_sub_result};
 use quty_client::repl::parse_repl_input;
 use quty_proto::constants::{MAX_KEY_SIZE, MAX_VALUE_SIZE};
-use quty_proto::{BatchErrorPayload, Command, Operation, ResponsePayload, StatusCode, SubResult};
+use quty_proto::{BatchErrorPayload, Command, Operation, ResponsePayload, StatusCode, SubResult, MAX_BATCH_OPERATIONS};
 use std::time::Duration;
+use quty_client::validate::{validate_batch, validate_key};
 
 #[test]
 fn test_parse_single_operations() {
@@ -122,12 +123,12 @@ fn test_parse_unclosed_quotes_rejected() {
 fn test_parse_key_and_value_size_limits() {
 	let oversized_key = "k".repeat(MAX_KEY_SIZE + 1);
 	let err = parse_repl_input(&format!("GET {oversized_key}")).expect_err("Oversized key must fail");
-	assert!(err.contains("Key exceeds maximum length"));
+	assert!(err.contains("exceeds maximum protocol limit"));
 
 	let oversized_val = "v".repeat(MAX_VALUE_SIZE + 1);
 	let err =
 		parse_repl_input(&format!("SET k:1 {oversized_val}")).expect_err("Oversized value must fail");
-	assert!(err.contains("Value exceeds maximum length"));
+	assert!(err.contains("exceeds maximum protocol limit"));
 }
 
 #[test]
@@ -161,4 +162,39 @@ fn test_format_sub_result_rendering() {
 		}),
 	};
 	assert!(format_sub_result(&abort_sub).contains("TRANSACTION ABORTED"));
+}
+
+#[test]
+fn test_validate_empty_key_fails() {
+	let err = validate_key("").expect_err("Empty key must be rejected");
+	assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[test]
+fn test_validate_key_boundary() {
+	let max_key = "k".repeat(MAX_KEY_SIZE);
+	assert!(validate_key(&max_key).is_ok());
+
+	let over_key = "k".repeat(MAX_KEY_SIZE + 1);
+	assert!(validate_key(&over_key).is_err());
+}
+
+#[test]
+fn test_validate_batch_limits() {
+	// Empty batch fails
+	assert!(validate_batch(&[]).is_err());
+
+	// Max batch size passes
+	let valid_ops = vec![
+		Operation::Get { key: "k:1".into() };
+		MAX_BATCH_OPERATIONS
+	];
+	assert!(validate_batch(&valid_ops).is_ok());
+
+	// Over limit fails
+	let oversized_ops = vec![
+		Operation::Get { key: "k:1".into() };
+		MAX_BATCH_OPERATIONS + 1
+	];
+	assert!(validate_batch(&oversized_ops).is_err());
 }

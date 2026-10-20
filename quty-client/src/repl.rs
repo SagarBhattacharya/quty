@@ -7,11 +7,11 @@ use crate::Client;
 use crate::format::render_response;
 use bytes::Bytes;
 use colored::Colorize;
-use quty_proto::constants::{MAX_KEY_SIZE, MAX_VALUE_SIZE};
 use quty_proto::{Command, Operation};
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use std::path::PathBuf;
+use crate::validate::{validate_key, validate_value};
 
 /// Starts the interactive terminal Read-Eval-Print-Loop (REPL).
 ///
@@ -268,7 +268,7 @@ fn parse_unary_key_op(verb: &str, tokens: &[String]) -> Result<Operation, String
 	if tokens.len() != 2 {
 		return Err(format!("syntax: {verb} <key>"));
 	}
-	validate_key(&tokens[1])?;
+	validate_key(&tokens[1]).map_err(|e| e.to_string())?;
 	let key = tokens[1].clone();
 
 	match verb {
@@ -286,8 +286,8 @@ fn parse_kv_mutation_op(verb: &str, tokens: &[String]) -> Result<Operation, Stri
 	if tokens.len() != 3 {
 		return Err(format!("syntax: {verb} <key> <value>"));
 	}
-	validate_key(&tokens[1])?;
-	validate_value(tokens[2].as_bytes())?;
+	validate_key(&tokens[1]).map_err(|e| e.to_string())?;
+	validate_value(tokens[2].as_bytes()).map_err(|e| e.to_string())?;
 	let key = tokens[1].clone();
 	let value = Bytes::copy_from_slice(tokens[2].as_bytes());
 
@@ -304,7 +304,7 @@ fn parse_expire_op(tokens: &[String]) -> Result<Operation, String> {
 	if tokens.len() != 3 {
 		return Err("syntax: EXPIRE <key> <ttl_ms>".into());
 	}
-	validate_key(&tokens[1])?;
+	validate_key(&tokens[1]).map_err(|e| e.to_string())?;
 	let ttl_ms = tokens[2]
 		.parse::<u64>()
 		.map_err(|_| "ttl_ms must be an unsigned integer".to_string())?;
@@ -314,29 +314,6 @@ fn parse_expire_op(tokens: &[String]) -> Result<Operation, String> {
 		ttl_ms,
 	})
 }
-
-/// Ensures key length does not exceed protocol limits.
-fn validate_key(key: &str) -> Result<(), String> {
-	if key.len() > MAX_KEY_SIZE {
-		return Err(format!(
-			"Key exceeds maximum length of {MAX_KEY_SIZE} bytes (was {})",
-			key.len()
-		));
-	}
-	Ok(())
-}
-
-/// Ensures value length does not exceed protocol limits.
-fn validate_value(val: &[u8]) -> Result<(), String> {
-	if val.len() > MAX_VALUE_SIZE {
-		return Err(format!(
-			"Value exceeds maximum length of {MAX_VALUE_SIZE} bytes (was {})",
-			val.len()
-		));
-	}
-	Ok(())
-}
-
 /// Returns the default path for persistent CLI history (`~/.quty_history`).
 fn get_history_path() -> Option<PathBuf> {
 	dirs::home_dir().map(|mut p| {
