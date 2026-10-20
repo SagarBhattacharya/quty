@@ -164,35 +164,57 @@ fn apply_write(
 ) -> (StatusCode, ResponsePayload, usize) {
 	let mut evicted = 0;
 
-	// Shield existing key from self-eviction
+	// 1. Capture pristine undo information BEFORE touching recency or mutating entry
+	let undo_action = match shard.entry(key) {
+		Some(existing_entry) => UndoRecord::Restore {
+			key: key.into(),
+			entry: existing_entry.clone(),
+		},
+		None => UndoRecord::Delete { key: key.into() },
+	};
+
+	// 2. Shield existing key from self-eviction during headroom calculation
 	shard.touch(key, clock);
 
 	let delta = shard.delta_required(key, value.len());
 	if delta > 0 && shard.used_memory_bytes() + delta > shard.max_memory_bytes() {
 		if !ctx.allow_inline_eviction {
+			// If inline eviction is disallowed, revert the touch if this was transactional
+			if let UndoRecord::Restore { ref entry, .. } = undo_action
+				&& let Some(e) = shard.entries.get_mut(key)
+			{
+				e.last_accessed.set(entry.last_accessed.get());
+			}
 			return (StatusCode::StorageFull, ResponsePayload::Null, 0);
 		}
+
+		#[allow(clippy::single_match_else)]
 		match lru.evict_headroom(shard, delta, clock) {
 			Ok(ev) => evicted += ev,
-			Err(CapacityExceeded) => return (StatusCode::StorageFull, ResponsePayload::Null, 0),
+			Err(CapacityExceeded) => {
+				if let UndoRecord::Restore { ref entry, .. } = undo_action
+					&& let Some(e) = shard.entries.get_mut(key)
+				{
+					e.last_accessed.set(entry.last_accessed.get());
+				}
+				return (StatusCode::StorageFull, ResponsePayload::Null, 0);
+			}
 		}
 	}
 
 	let status = status_fn(shard.entry(key));
 
-	let old_entry = match shard.insert(key, value, None, clock) {
-		Ok(old) => old,
-		Err(CapacityExceeded) => return (StatusCode::StorageFull, ResponsePayload::Null, 0),
-	};
-
-	if let Some(old) = old_entry {
-		ctx.record_undo(UndoRecord::Restore {
-			key: key.into(),
-			entry: old,
-		});
-	} else {
-		ctx.record_undo(UndoRecord::Delete { key: key.into() });
+	if let Err(CapacityExceeded) = shard.insert(key, value, None, clock) {
+		if let UndoRecord::Restore { ref entry, .. } = undo_action
+			&& let Some(e) = shard.entries.get_mut(key)
+		{
+			e.last_accessed.set(entry.last_accessed.get());
+		}
+		return (StatusCode::StorageFull, ResponsePayload::Null, 0);
 	}
+
+	// 3. Record the pristine pre-mutation undo record
+	ctx.record_undo(undo_action);
 
 	(status, ResponsePayload::Null, evicted)
 }
@@ -619,5 +641,72 @@ mod tests {
 		assert_eq!(evicted, 0);
 		assert_eq!(shard.len(), 1);
 		assert_eq!(shard.get_value("k:self", now, clock).unwrap().len(), 40);
+	}
+
+	#[test]
+	fn test_batch_rollback_preserves_lru_clock_and_ttl() {
+		let (mut shard, lru) = make_test_fixture(1024);
+		let now = Instant::now();
+		let original_clock = 50u32;
+		let future_ttl = now + Duration::from_secs(300);
+
+		// 1. Insert an existing entry with clock = 50 and active TTL
+		shard
+			.insert(
+				"k:cold",
+				Bytes::from_static(b"original_value"),
+				Some(future_ttl),
+				original_clock,
+			)
+			.unwrap();
+
+		assert_eq!(shard.entry("k:cold").unwrap().idle_duration(100), 50);
+		assert_eq!(shard.entry("k:cold").unwrap().expires_at, Some(future_ttl));
+
+		// 2. Execute a transactional mutation with clock = 100
+		let mut undo_log = SmallVec::new();
+		let update_op = Operation::Set {
+			key: "k:cold".into(),
+			value: Bytes::from_static(b"new_overwritten_val"),
+		};
+
+		let (status, _, _) = {
+			let mut ctx = TxContext::transactional(&mut undo_log);
+			execute_mutation(&mut shard, &lru, &update_op, &mut ctx, now, 100)
+		};
+		assert_eq!(status, StatusCode::Ok);
+		assert_eq!(undo_log.len(), 1);
+
+		// Verified that the key in the shard currently has the updated clock
+		assert_eq!(shard.entry("k:cold").unwrap().idle_duration(100), 0);
+
+		// 3. Simulate transaction rollback (unwind undo log)
+		while let Some(undo) = undo_log.pop() {
+			match undo {
+				UndoRecord::Restore { key, entry } => {
+					shard.restore_entry(key, entry);
+				}
+				UndoRecord::Delete { key } => {
+					shard.remove(&key);
+				}
+				UndoRecord::RevertExpiry { key, previous_deadline } => {
+					shard.revert_expiry(&key, previous_deadline);
+				}
+			}
+		}
+
+		// 4. Assert: Value, original TTL, and original recency clock must be restored
+		let restored_entry = shard.entry("k:cold").expect("Key must exist after rollback");
+		assert_eq!(restored_entry.value, Bytes::from_static(b"original_value"));
+		assert_eq!(
+			restored_entry.expires_at,
+			Some(future_ttl),
+			"Original TTL must be restored"
+		);
+		assert_eq!(
+			restored_entry.idle_duration(100),
+			50,
+			"Original recency clock (50) must be restored, not overwritten with 100"
+		);
 	}
 }

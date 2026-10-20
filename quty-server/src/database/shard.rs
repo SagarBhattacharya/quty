@@ -11,10 +11,10 @@ pub struct CapacityExceeded;
 
 /// Storage partition holding hash buckets, dense key index, and byte counters.
 pub struct Shard {
-	entries: AHashMap<Box<str>, Entry>,
-	keys: Vec<Box<str>>,
-	used_payload_bytes: usize,
-	max_payload_bytes: usize,
+	pub(super) entries: AHashMap<Box<str>, Entry>,
+	pub(super) keys: Vec<Box<str>>,
+	pub(super) used_payload_bytes: usize,
+	pub(super) max_payload_bytes: usize,
 }
 
 impl Shard {
@@ -107,7 +107,6 @@ impl Shard {
 		let new_size = Self::entry_size(key.len(), value.len());
 
 		if let Some(existing) = self.entries.get_mut(key) {
-			existing.touch(current_clock);
 			let old_size = Self::entry_size(key.len(), existing.value.len());
 
 			if new_size > old_size {

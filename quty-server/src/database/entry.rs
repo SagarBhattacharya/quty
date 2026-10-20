@@ -4,15 +4,38 @@ use bytes::Bytes;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 
-/// Cached entry holding the binary payload, optional expiration, and access clock.
 #[derive(Debug)]
+pub struct LastAccessed(AtomicU32);
+
+impl LastAccessed {
+	pub fn new(clock: u32) -> Self {
+		LastAccessed(AtomicU32::new(clock))
+	}
+
+	pub fn set(&self, clock: u32) {
+		self.0.store(clock, Ordering::Release);
+	}
+
+	pub fn get(&self) -> u32 {
+		self.0.load(Ordering::Acquire)
+	}
+}
+
+impl Clone for LastAccessed {
+	fn clone(&self) -> Self {
+		Self(AtomicU32::new(self.0.load(Ordering::Relaxed)))
+	}
+}
+
+/// Cached entry holding the binary payload, optional expiration, and access clock.
+#[derive(Debug, Clone)]
 pub struct Entry {
 	/// Cached payload slice. O(1) shallow clones via reference-counted slice.
 	pub value: Bytes,
 	/// Absolute expiration deadline. `None` represents a persistent key.
 	pub expires_at: Option<Instant>,
 	/// Monotonic timestamp in 100ms units.
-	pub last_accessed: AtomicU32,
+	pub last_accessed: LastAccessed,
 	/// Index position inside the shard's key-sampling vector.
 	pub key_index: usize,
 }
@@ -30,7 +53,7 @@ impl Entry {
 		Self {
 			value,
 			expires_at,
-			last_accessed: AtomicU32::new(current_clock),
+			last_accessed: LastAccessed::new(current_clock),
 			key_index,
 		}
 	}
@@ -48,9 +71,9 @@ impl Entry {
 	/// Updates the access time if the clock has progressed forward.
 	#[inline]
 	pub fn touch(&self, current_clock: u32) {
-		let prev = self.last_accessed.load(Ordering::Relaxed);
+		let prev = self.last_accessed.get();
 		if prev != current_clock {
-			self.last_accessed.store(current_clock, Ordering::Relaxed);
+			self.last_accessed.set(current_clock);
 		}
 	}
 
@@ -58,7 +81,7 @@ impl Entry {
 	#[inline]
 	#[must_use]
 	pub fn idle_duration(&self, current_clock: u32) -> u32 {
-		current_clock.saturating_sub(self.last_accessed.load(Ordering::Relaxed))
+		current_clock.saturating_sub(self.last_accessed.get())
 	}
 }
 
