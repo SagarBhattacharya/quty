@@ -18,21 +18,26 @@ A high-performance, sharded in-memory cache server written in Rust, featuring de
 - **Custom Binary Protocol:** Compact 20-byte frame header supporting pipelined, stream-oriented I/O.
 - **Jemalloc Integration:** Uses `tikv-jemallocator` as the memory allocator to help manage heap fragmentation under sustained write workloads.
 
-## Performance Overview
+### Benchmark Summary
 
-Benchmarked over loopback TCP using `quty-bench`, with 64 shards and 50 concurrent connections. Results are from the documented benchmark environment and workload configurations.
+Measured locally on Fedora Linux 44 using an AMD Ryzen 5 5500U (6 cores / 12 threads), Rust 1.99.0, 64 shards, and loopback TCP. Each workload ran for approximately 10 seconds.
 
-| Workload                         | Pipeline |                                      Throughput | p50 Latency | p99 Latency | Max Latency |
-|----------------------------------|---------:|------------------------------------------------:|------------:|------------:|------------:|
-| **100% Writes (`SET`)**          |       16 |                               2,251,994 ops/sec |       19 µs |       57 µs |      235 µs |
-| **100% Reads (`GET`)**           |       16 |                               1,920,139 ops/sec |       23 µs |       67 µs |      208 µs |
-| **Mixed (80% Read / 20% Write)** |       16 |                               1,867,099 ops/sec |       24 µs |       68 µs |      293 µs |
-| **Mixed (Zipfian Skew)**         |       16 |                               1,747,944 ops/sec |       25 µs |       75 µs |      299 µs |
-| **Pipelined Throughput**         |       32 |                               2,585,439 ops/sec |       17 µs |       50 µs |      276 µs |
-| **Atomic Batch Commits**         |        8 | 794,299 batches/sec (~2.38M sub-operations/sec) |       32 µs |      101 µs |      428 µs |
-| **Batch Abort Rollbacks**        |        8 |                             820,223 batches/sec |       31 µs |       99 µs |      565 µs |
+| Workload                       | Pipeline Depth | Clients | Throughput (requests/s) |    p50 |    p99 |
+|--------------------------------|---------------:|--------:|------------------------:|-------:|-------:|
+| SET (100% writes)              |             16 |      50 |                   2.34M |  18 µs |  57 µs |
+| GET (100% reads)               |             16 |      50 |                   2.09M |  21 µs |  64 µs |
+| Mixed (80% reads / 20% writes) |             16 |      50 |                   2.03M |  21 µs |  65 µs |
+| Zipfian-skewed mixed workload  |             16 |      50 |                   1.91M |  22 µs |  71 µs |
+| Unpipelined                    |              1 |      50 |                  170.1K | 250 µs | 791 µs |
+| Deep pipelining                |             32 |      50 |                   2.81M |  15 µs |  51 µs |
+| Atomic batch commits           |              8 |      30 |        844.1K batches/s |  30 µs |  98 µs |
+| Atomic batch rollbacks         |              8 |      30 |        915.2K batches/s |  28 µs |  88 µs |
 
-Detailed benchmark methodology and reproduction steps are documented in [`docs/benches.md`](docs/benches.md).
+The highest measured throughput was **2.81 million requests/s** with pipeline depth 32. The unpipelined workload reached approximately **170K requests/s**.
+
+These are local benchmark results, not universal performance guarantees. Results depend on workload, concurrency, pipeline depth, hardware, and configuration. Batch throughput counts batch requests, not individual operations within each batch.
+
+See [`benches.md`](docs/benches.md) for the full methodology, scenario results, analysis, and reproduction instructions.
 
 ---
 
