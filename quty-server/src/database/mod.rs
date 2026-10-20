@@ -126,14 +126,27 @@ impl Engine {
 
 		let mut guard = RollbackGuard::new(&mut shard, ops.len());
 		let mut results = Vec::with_capacity(ops.len());
+		let mut batch_hits = 0;
+		let mut batch_misses = 0;
 
 		for (idx, op) in ops.iter().enumerate() {
 			let (active_shard, undo_log) = guard.split_mut();
 			let mut ctx = TxContext::transactional(undo_log);
-			let (status, payload, _) =
+
+			let (status, payload, evicted) =
 				execute_mutation(active_shard, &self.lru, op, &mut ctx, now, clock);
 
+			if matches!(op, Operation::Get { .. }) {
+				if status == StatusCode::Ok {
+					batch_hits += 1;
+				} else if status == StatusCode::KeyNotFound
+					|| status == StatusCode::KeyExpired {
+					batch_misses += 1;
+				}
+			}
+
 			if status.should_abort_batch() {
+				// Batch failed - do not commit or record hit stats for the aborted batch
 				return (
 					StatusCode::BatchShortCircuited,
 					ResponsePayload::BatchError(BatchErrorPayload {
@@ -143,10 +156,23 @@ impl Engine {
 				);
 			}
 
+			if evicted > 0 {
+				self.stats.inc_evictions(evicted);
+			}
+
 			results.push(SubResult { status, payload });
 		}
 
 		guard.commit();
+
+		// Commit telemetry stats on batch success
+		for _ in 0..batch_hits {
+			self.stats.inc_hits();
+		}
+		for _ in 0..batch_misses {
+			self.stats.inc_misses();
+		}
+
 		(StatusCode::Ok, ResponsePayload::Array(results))
 	}
 
@@ -390,5 +416,38 @@ mod tests {
 			"Memory must drop down to low watermark target"
 		);
 		assert_eq!(after_stats.evictions, evicted as u64);
+	}
+
+	#[test]
+	fn test_batch_updates_hit_and_miss_statistics() {
+		let engine = Engine::new(EngineConfig {
+			num_shards: 4,
+			max_memory_bytes: 1024 * 1024,
+			initial_shard_capacity: 64,
+			eviction_burst_limit: 16,
+		});
+
+		// Populate a test key
+		let _ = engine.execute(Command::Single(Operation::Set {
+			key: "test:k1".to_string(),
+			value: Bytes::from_static(b"value1"),
+		}));
+
+		let initial_stats = engine.collect_stats();
+		assert_eq!(initial_stats.get_hits, 0);
+		assert_eq!(initial_stats.get_misses, 0);
+
+		// Execute batch: 1 Hit (test:k1), 1 Miss (test:missing)
+		let batch_cmd = Command::Batch(vec![
+			Operation::Get { key: "test:k1".to_string() },
+			Operation::Get { key: "test:missing".to_string() },
+		]);
+
+		let (status, _) = engine.execute(batch_cmd);
+		assert_eq!(status, StatusCode::Ok);
+
+		let stats_after = engine.collect_stats();
+		assert_eq!(stats_after.get_hits, 1, "Batch GET should record a cache hit");
+		assert_eq!(stats_after.get_misses, 1, "Batch GET should record a cache miss");
 	}
 }
