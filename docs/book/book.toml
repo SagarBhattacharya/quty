@@ -1,0 +1,12 @@
+[book]
+title = "Quty Documentation"
+authors = ["Sagar Bhattacharya"]
+description = "High-performance sharded in-memory cache server with atomic batch transactions"
+language = "en"
+src = "."
+
+[output.html]
+git-repository-url = "https://github.com/SagarBhattacharya/quty"
+edit-url-template = "https://github.com/SagarBhattacharya/quty/edit/main/docs/{path}"
+default-theme = "rust"
+preferred-dark-theme = "coal"
