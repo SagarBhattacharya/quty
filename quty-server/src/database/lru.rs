@@ -110,26 +110,45 @@ impl LruPolicy {
 
 		let effective_headroom = INLINE_HEADROOM_BYTES.min(max_payload / 8);
 		let target_bytes = max_payload.saturating_sub(required_bytes + effective_headroom);
-		let mut evicted = 0;
+
+		let mut candidates: SmallVec<Box<str>, 16> = SmallVec::new();
+		let mut projected_used_bytes = shard.used_memory_bytes();
 
 		for _ in 0..MAX_EVICTION_ATTEMPTS {
-			if shard.used_memory_bytes() <= target_bytes {
+			if projected_used_bytes <= target_bytes {
 				break;
 			}
 
 			if let Some(candidate) = self.find_candidate(shard, current_clock) {
-				shard.remove(&candidate);
-				evicted += 1;
+				if candidates.contains(&candidate) {
+					break;
+				}
+
+				if let Some(entry) = shard.entry(&candidate) {
+					let entry_bytes = candidate.len() + entry.value.len();
+					projected_used_bytes = projected_used_bytes.saturating_sub(entry_bytes);
+					candidates.push(candidate);
+				} else {
+					break;
+				}
 			} else {
 				break;
 			}
 		}
 
-		if shard.used_memory_bytes() + required_bytes <= max_payload {
-			Ok(evicted)
-		} else {
-			Err(CapacityExceeded)
+		if projected_used_bytes + required_bytes > max_payload {
+			// Write cannot succeed. Abort immediately WITHOUT deleting anything!
+			return Err(CapacityExceeded);
 		}
+
+		let mut evicted = 0;
+		for key in &candidates {
+			if shard.remove(key).is_some() {
+				evicted += 1;
+			}
+		}
+
+		Ok(evicted)
 	}
 
 	/// Active expiration sweep: samples keys and removes expired items.
@@ -281,5 +300,22 @@ mod tests {
 		assert!(shard.entry("k:act").is_some());
 		assert!(shard.entry("k:exp1").is_none());
 		assert!(shard.entry("k:exp2").is_none());
+	}
+
+	#[test]
+	fn test_failed_headroom_eviction_does_not_delete_keys() {
+		let mut shard = Shard::new(100, 64);
+		let lru = LruPolicy::new(128);
+
+		for i in 0..5 {
+			let k = format!("k:{i}");
+			shard.insert(&k, Bytes::from_static(b"1234567"), None, 0).unwrap(); // 3 + 7 = 10B
+		}
+		assert_eq!(shard.len(), 5);
+		assert_eq!(shard.used_memory_bytes(), 50);
+
+		let res = lru.evict_headroom(&mut shard, 110, 0);
+		assert_eq!(res, Err(CapacityExceeded));
+		assert_eq!(shard.len(), 5, "No keys should be evicted on impossible write");
 	}
 }
