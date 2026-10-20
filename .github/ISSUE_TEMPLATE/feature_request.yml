@@ -1,0 +1,19 @@
+name: Feature Request
+description: Propose a new feature, protocol command, or engine optimization
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What feature or improvement would you like to see?
+    validations:
+      required: true
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Problem / Motivation
+      description: Why is this needed, or what use case does it solve?
+    validations:
+      required: true

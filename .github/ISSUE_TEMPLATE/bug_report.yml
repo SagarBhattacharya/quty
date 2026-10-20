@@ -1,0 +1,34 @@
+name: Bug Report
+description: Report an issue or unexpected behavior in Quty
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for filing a bug report! Please provide as much detail as possible.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Commands, code snippets, or client interactions to reproduce the issue.
+      placeholder: |
+        1. Start server with: quty-server --shards 64
+        2. Run: quty-cli ...
+        3. Observed behavior vs Expected behavior
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS version, architecture, Rust version (`rustc --version`), and Quty version.
+      placeholder: "e.g., Fedora 44 (Linux 7.2.8), x86_64, rustc 1.99, quty v0.1.0"
+    validations:
+      required: true
