@@ -292,7 +292,7 @@ mod tests {
 	use super::Engine;
 	use crate::config::EngineConfig;
 	use bytes::Bytes;
-	use quty_proto::{Command, Operation, ResponsePayload, StatusCode};
+	use quty_proto::{routing_key, Command, Operation, ResponsePayload, StatusCode};
 
 	#[test]
 	fn test_batch_cross_shard_routing_guard() {
@@ -461,7 +461,7 @@ mod tests {
 			initial_shard_capacity: 64,
 			eviction_burst_limit: 16,
 		});
-		
+
 		for i in 0..64 {
 			let _ = engine.execute(Command::Single(Operation::Set {
 				key: format!("s{i:02}:k{i}"),
@@ -482,7 +482,7 @@ mod tests {
 		assert!(stats_before.used_memory_bytes > 0);
 		assert_eq!(stats_before.get_hits, 1);
 		assert_eq!(stats_before.get_misses, 1);
-		
+
 		let (status, _) = engine.execute(Command::Reset);
 		assert_eq!(status, StatusCode::NoContent);
 
@@ -499,5 +499,85 @@ mod tests {
 			}));
 			assert_eq!(get_status, StatusCode::KeyNotFound);
 		}
+	}
+
+	#[test]
+	fn test_exact_payload_accounting_bytes() {
+		let engine = Engine::new(EngineConfig {
+			num_shards: 1,
+			max_memory_bytes: 1024,
+			initial_shard_capacity: 16,
+			eviction_burst_limit: 8,
+		});
+
+		let k = "user:key".to_string(); // 8 bytes
+		let v = Bytes::from_static(b"0123456789"); // 10 bytes -> Total 18 bytes
+
+		let (status, _) = engine.execute(Command::Single(Operation::Set {
+			key: k.clone(),
+			value: v,
+		}));
+		assert_eq!(status, StatusCode::Created);
+
+		let stats = engine.collect_stats();
+		assert_eq!(
+			stats.used_memory_bytes, 18,
+			"Memory tracking must exactly equal key.len() + val.len()"
+		);
+
+		// Overwrite with smaller value: 4 bytes -> Total 12 bytes
+		let (status_ovw, _) = engine.execute(Command::Single(Operation::Set {
+			key: k,
+			value: Bytes::from_static(b"four"),
+		}));
+		assert_eq!(status_ovw, StatusCode::Ok);
+
+		let stats_after = engine.collect_stats();
+		assert_eq!(
+			stats_after.used_memory_bytes, 12,
+			"Memory tracking must adjust correctly on in-place replacement"
+		);
+	}
+
+	#[test]
+	fn test_per_shard_capacity_partitioning_isolation() {
+		// 2 shards, total 200 bytes -> exactly 100 bytes budget per shard
+		let engine = Engine::new(EngineConfig {
+			num_shards: 2,
+			max_memory_bytes: 200,
+			initial_shard_capacity: 16,
+			eviction_burst_limit: 0, // Disable eviction to test pure capacity walls
+		});
+
+		let prefix_1 = "s1";
+		let prefix_2 = "s2";
+		assert_ne!(engine.shard_index(prefix_1), engine.shard_index(prefix_2));
+
+		let _ = engine.execute(Command::Single(Operation::Set {
+			key: format!("{prefix_1}:1"),
+			value: Bytes::from(vec![0xAA; 80]),
+		}));
+
+		// Second write to Shard 1 demanding 30B (83 + 33 = 116 > 100) -> Fails with StorageFull
+		let (fail_status, _) = engine.execute(Command::Single(Operation::Set {
+			key: format!("{prefix_1}:2"),
+			value: Bytes::from(vec![0xAA; 30]),
+		}));
+		assert_eq!(
+			fail_status,
+			StatusCode::StorageFull,
+			"Shard 1 must reject write when its individual budget is exceeded"
+		);
+
+		// 2. Shard 2 is untouched and must accept writes even though Shard 1 is full
+		let (ok_status, _) = engine.execute(Command::Single(Operation::Set {
+			key: format!("{prefix_2}:1"),
+			value: Bytes::from(vec![0xBB; 80]),
+		}));
+		assert_eq!(
+			ok_status,
+			StatusCode::Created,
+			"Shard 2 must accept writes within its own allocation despite Shard 1 saturation"
+		);
 	}
 }

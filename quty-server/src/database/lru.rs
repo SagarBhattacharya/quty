@@ -103,6 +103,10 @@ impl LruPolicy {
 		required_bytes: usize,
 		current_clock: u32,
 	) -> Result<usize, CapacityExceeded> {
+		if self.eviction_burst_limit == 0 {
+			return Err(CapacityExceeded);
+		}
+		
 		let max_payload = shard.max_memory_bytes();
 		if required_bytes > max_payload {
 			return Err(CapacityExceeded);

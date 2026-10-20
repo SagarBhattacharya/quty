@@ -29,6 +29,11 @@ impl Shard {
 		}
 	}
 
+	/// Computes the accounted payload size for an entry.
+	///
+	/// Accounting strictly covers the raw key string bytes and value slice bytes.
+	/// Metadata structures (`Entry` layout, hash table control bytes, allocator chunks)
+	/// are not included in this count.
 	#[inline]
 	fn entry_size(key_len: usize, val_len: usize) -> usize {
 		key_len + val_len
