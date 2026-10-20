@@ -6,7 +6,9 @@
 
 use crate::command::{Command, CommandType, Operation, OperationDecodeError};
 use crate::constants::{
-	MAX_BATCH_OPERATIONS, PROTOCOL_MAGIC, PROTOCOL_VERSION_V1, REQUEST_HEADER_SIZE,
+	MAX_BATCH_OPERATIONS, PROTOCOL_MAGIC,
+	PROTOCOL_VERSION_V1, REQUEST_HEADER_SIZE,
+	MAX_PAYLOAD_SIZE
 };
 use crate::to_u32_len;
 use bytes::{Buf, BufMut, BytesMut};
@@ -149,21 +151,49 @@ impl Request {
 
 		// Peek payload length from bytes 16..20 without advancing buffer cursor
 		let payload_len = u32::from_be_bytes([src[16], src[17], src[18], src[19]]) as usize;
-		let total_frame_len = REQUEST_HEADER_SIZE + payload_len;
+		if payload_len > MAX_PAYLOAD_SIZE {
+			return Err(RequestDecodeError::PayloadTooLarge(
+				payload_len,
+				MAX_PAYLOAD_SIZE,
+			));
+		}
 
+		let total_frame_len = REQUEST_HEADER_SIZE + payload_len;
 		if src.len() < total_frame_len {
 			return Ok(None);
 		}
 
 		let header = RequestHeader::decode(src)?;
+		if header.flags != 0 {
+			return Err(RequestDecodeError::InvalidFlags(header.flags));
+		}
+
 		let mut payload = src.split_to(payload_len);
 
 		let command = match header.command_type {
-			CommandType::Ping => Command::Ping,
-			CommandType::Stats => Command::Stats,
-			CommandType::Reset => Command::Reset,
+			CommandType::Ping => {
+				if payload_len != 0 {
+					return Err(RequestDecodeError::UnexpectedPayload);
+				}
+				Command::Ping
+			},
+			CommandType::Stats => {
+				if payload_len != 0 {
+					return Err(RequestDecodeError::UnexpectedPayload);
+				}
+				Command::Stats
+			},
+			CommandType::Reset => {
+				if payload_len != 0 {
+					return Err(RequestDecodeError::UnexpectedPayload);
+				}
+				Command::Reset
+			},
 			CommandType::Single => {
 				let op = Operation::decode(&mut payload)?;
+				if payload.has_remaining() {
+					return Err(RequestDecodeError::TrailingBytes);
+				}
 				Command::Single(op)
 			}
 			CommandType::Batch => {
@@ -179,6 +209,10 @@ impl Request {
 				for _ in 0..op_count {
 					let op = Operation::decode(&mut payload)?;
 					ops.push(op);
+				}
+
+				if payload.has_remaining() {
+					return Err(RequestDecodeError::TrailingBytes);
 				}
 				Command::Batch(ops)
 			}
@@ -215,10 +249,22 @@ pub enum RequestDecodeError {
 	/// Underlying sub-operation decoding failure.
 	#[error("{0}")]
 	OpError(#[from] OperationDecodeError),
+	/// Flags must be 0x00 for Quty Protocol v1
+	#[error("Reserved flag bits must be 0x00, got: 0x{0:02X}")]
+	InvalidFlags(u8),
+	/// Payload exceeded [`MAX_PAYLOAD_SIZE`]
+	#[error("Payload size ({0} B) exceeds maximum limit ({1} B)")]
+	PayloadTooLarge(usize, usize),
+	/// Unexpected Payload (returned by PING/STATS/RESET if any payload present)
+	#[error("Unexpected payload present for zero-argument command")]
+	UnexpectedPayload,
+	/// Reported payload length does not match consumed payload
+	#[error("Payload length mismatch: unparsed trailing bytes remaining")]
+	TrailingBytes,
 }
 
 #[cfg(test)]
-mod batch_limit_tests {
+mod tests {
 	use super::*;
 	use bytes::BytesMut;
 	use crate::constants::MAX_BATCH_OPERATIONS;
@@ -229,9 +275,9 @@ mod batch_limit_tests {
 		for i in 0..count {
 			ops.push(Operation::Get { key: format!("s00:k:{i}") });
 		}
-		
+
 		let request = Request::new(
-			1, 
+			1,
 			Command::Batch(ops)
 		);
 		request.encode(&mut buf);
@@ -255,5 +301,64 @@ mod batch_limit_tests {
 			decoded.is_err(),
 			"Batch of MAX_BATCH_SIZE + 1 must be rejected during protocol decoding"
 		);
+	}
+
+	#[test]
+	fn test_reject_oversized_payload_len_early() {
+		let mut buf = BytesMut::new();
+		buf.put_u32(PROTOCOL_MAGIC);
+		buf.put_u16(PROTOCOL_VERSION_V1);
+		buf.put_u8(CommandType::Single as u8);
+		buf.put_u8(0); // flags
+		buf.put_u64(1); // req_id
+		buf.put_u32(100 * 1024 * 1024); // 100 MB > 64 MB limit
+
+		let err = Request::decode(&mut buf).expect_err("Must reject oversized payload");
+		assert!(matches!(err, RequestDecodeError::PayloadTooLarge(..)));
+	}
+
+	#[test]
+	fn test_reject_nonzero_reserved_flags() {
+		let mut buf = BytesMut::new();
+		buf.put_u32(PROTOCOL_MAGIC);
+		buf.put_u16(PROTOCOL_VERSION_V1);
+		buf.put_u8(CommandType::Ping as u8);
+		buf.put_u8(0xFF); // Invalid non-zero flag
+		buf.put_u64(1);
+		buf.put_u32(0);
+
+		let err = Request::decode(&mut buf).expect_err("Must reject non-zero flags");
+		assert!(matches!(err, RequestDecodeError::InvalidFlags(0xFF)));
+	}
+
+	#[test]
+	fn test_reject_unexpected_payload_for_ping() {
+		let mut buf = BytesMut::new();
+		buf.put_u32(PROTOCOL_MAGIC);
+		buf.put_u16(PROTOCOL_VERSION_V1);
+		buf.put_u8(CommandType::Ping as u8);
+		buf.put_u8(0);
+		buf.put_u64(1);
+		buf.put_u32(8); // Non-zero payload for PING
+		buf.put_u64(0xDEAD_BEEF);
+
+		let err = Request::decode(&mut buf).expect_err("PING with payload must fail");
+		assert_eq!(err, RequestDecodeError::UnexpectedPayload);
+	}
+
+	#[test]
+	fn test_reject_trailing_bytes_in_single_op() {
+		let mut buf = BytesMut::new();
+		let op = Operation::Get { key: "k:1".into() };
+		let req = Request::new(1, Command::Single(op));
+		req.encode(&mut buf);
+
+		// Artificially inflate payload_len by 4 bytes and add trailing junk
+		let real_len = u32::from_be_bytes([buf[16], buf[17], buf[18], buf[19]]);
+		buf[16..20].copy_from_slice(&(real_len + 4).to_be_bytes());
+		buf.put_u32(0xCAFE_BABE);
+
+		let err = Request::decode(&mut buf).expect_err("Trailing bytes must fail");
+		assert_eq!(err, RequestDecodeError::TrailingBytes);
 	}
 }

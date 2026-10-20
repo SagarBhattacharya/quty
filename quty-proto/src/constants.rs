@@ -20,3 +20,10 @@ pub const MAX_VALUE_SIZE: usize = 32 * 1024 * 1024;
 
 /// Maximum number of sub-operations allowable in a single batch (64).
 pub const MAX_BATCH_OPERATIONS: usize = 64;
+
+/// Maximum total wire payload size allowed in a single frame (64 MB).
+/// Accommodates full 32 MB single values plus generous batch overhead.
+pub const MAX_PAYLOAD_SIZE: usize = 64 * 1024 * 1024;
+
+/// Absolute maximum frame size (Header + Payload).
+pub const MAX_FRAME_SIZE: usize = REQUEST_HEADER_SIZE + MAX_PAYLOAD_SIZE;
